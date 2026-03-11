@@ -75,14 +75,3 @@ python -m streamlit run streamlit_app.py
 - **Grounded prompts** are critical to reduce hallucinations.
 - Retrieval quality strongly impacts final answer quality.
 
----
-
-## LinkedIn post idea
-
-I built a RAG project from scratch in Python to learn how retrieval actually works under the hood.
-
-Instead of using high-level frameworks, I implemented chunking, embeddings, manual cosine similarity search, optional FAISS, and grounded prompt injection myself.
-
-This gave me a much better understanding of how to reduce hallucinations and produce evidence-based answers.
-
-#RAG #LLM #Python #NLP #MLOps #GenerativeAI
