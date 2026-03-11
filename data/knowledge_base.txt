@@ -1,0 +1,13 @@
+Retrieval-Augmented Generation (RAG) improves reliability by grounding a model in external context. Instead of asking a model to answer from memory alone, RAG retrieves relevant documents first.
+
+A typical RAG pipeline has five stages: ingestion, chunking, embedding, retrieval, and generation. Ingestion loads source files. Chunking splits long documents into smaller pieces that fit model context windows. Embedding converts each chunk into a vector. Retrieval finds chunks nearest to the user query in vector space. Generation builds a prompt with those chunks and asks a language model to answer.
+
+Overlapping chunks are important because semantic boundaries rarely align with fixed character limits. Without overlap, key facts may be split across two chunks, and retrieval may miss crucial context. With overlap, adjacent chunks share some text, which preserves continuity and improves recall.
+
+Cosine similarity measures directional alignment between vectors. If two vectors point in similar directions, their cosine score approaches 1.0. In RAG, we often L2-normalize vectors so cosine similarity can be computed efficiently as a dot product.
+
+Grounded prompting reduces hallucinations by constraining generation. A good instruction says: answer only from the provided context, and if the answer is missing, explicitly say you don't know. This policy improves factuality because the model is rewarded for abstaining when evidence is absent.
+
+A simple vector store can be implemented with a NumPy matrix where each row is an embedding. Retrieval computes similarities between a query vector and all rows, then returns top-K indices. FAISS is a faster alternative for large-scale retrieval but follows the same nearest-neighbor idea.
+
+Evaluation matters. You should test whether the retrieved chunks contain the gold answer (retrieval recall) and whether final answers are faithful to retrieved context (groundedness).
