@@ -66,6 +66,15 @@ python rag_from_scratch.py --query "Why do we use overlap in chunking?"
 python -m streamlit run streamlit_app.py
 ```
 
+4. Run tests:
+
+```bash
+pip install -r requirements-dev.txt
+pytest -v
+```
+
+Tests run automatically on every push/PR via [GitHub Actions](.github/workflows/tests.yml).
+
 ---
 
 ## Sample learning insights

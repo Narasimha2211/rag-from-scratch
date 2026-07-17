@@ -21,6 +21,7 @@ Environment variables (optional):
 from __future__ import annotations
 
 import argparse
+import hashlib
 import os
 import re
 from dataclasses import dataclass
@@ -133,7 +134,11 @@ class HashingEmbedder(BaseEmbedder):
     def _embed_one(self, text: str) -> np.ndarray:
         vec = np.zeros(self.dim, dtype=np.float32)
         for token in text.lower().split():
-            idx = hash(token) % self.dim
+            # Python's built-in hash() is randomized per-process (PYTHONHASHSEED),
+            # so the same token would map to different indices across runs.
+            # Use a stable hash so embeddings are reproducible.
+            digest = hashlib.md5(token.encode("utf-8")).hexdigest()
+            idx = int(digest, 16) % self.dim
             vec[idx] += 1.0
         return vec
 
