@@ -23,6 +23,7 @@ with st.sidebar:
     chunk_size = st.slider("Chunk Size", min_value=200, max_value=1200, value=450, step=50)
     overlap = st.slider("Overlap", min_value=0, max_value=400, value=90, step=10)
     top_k = st.slider("Top-K", min_value=1, max_value=8, value=3, step=1)
+    respect_word_boundaries = st.checkbox("Respect word boundaries when chunking", value=False)
     use_llm = st.checkbox("Generate with OpenAI LLM", value=False)
 
 st.subheader("1) Document")
@@ -50,7 +51,12 @@ if st.button("Run RAG", type="primary"):
         st.stop()
 
     try:
-        chunks = chunk_text(text, chunk_size=chunk_size, overlap=overlap)
+        chunks = chunk_text(
+            text,
+            chunk_size=chunk_size,
+            overlap=overlap,
+            respect_word_boundaries=respect_word_boundaries,
+        )
         embedder = choose_embedder(embedder_name)
         chunk_vectors = embedder.encode(chunks)
 

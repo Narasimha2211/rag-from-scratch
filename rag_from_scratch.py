@@ -34,7 +34,12 @@ import numpy as np
 # 1) DOCUMENT CHUNKING
 # -----------------------------
 
-def chunk_text(text: str, chunk_size: int = 500, overlap: int = 100) -> List[str]:
+def chunk_text(
+    text: str,
+    chunk_size: int = 500,
+    overlap: int = 100,
+    respect_word_boundaries: bool = False,
+) -> List[str]:
     """
     Split text into overlapping character windows.
 
@@ -47,6 +52,9 @@ def chunk_text(text: str, chunk_size: int = 500, overlap: int = 100) -> List[str
         text: Source document text.
         chunk_size: Number of characters per chunk.
         overlap: Number of characters shared with the next chunk.
+        respect_word_boundaries: If True, a chunk that would end mid-word is
+            trimmed back to the previous whitespace so words aren't split in
+            half (which can otherwise weaken embeddings for boundary words).
     """
     if chunk_size <= 0:
         raise ValueError("chunk_size must be > 0")
@@ -60,11 +68,34 @@ def chunk_text(text: str, chunk_size: int = 500, overlap: int = 100) -> List[str
     step = chunk_size - overlap
 
     while start < len(text):
+        if respect_word_boundaries:
+            # A start that lands on whitespace (e.g. right after a trimmed
+            # chunk) leaves no earlier boundary to trim back to; skip past it
+            # so the next chunk begins on a real word.
+            while start < len(text) and text[start].isspace():
+                start += 1
+            if start >= len(text):
+                break
+
         end = min(start + chunk_size, len(text))
+        if respect_word_boundaries and end < len(text) and not text[end].isspace():
+            boundary = text.rfind(" ", start, end)
+            if boundary > start:
+                end = boundary
         chunk = text[start:end].strip()
         if chunk:
             chunks.append(chunk)
-        start += step
+
+        if respect_word_boundaries:
+            if end >= len(text):
+                # Reached the end of the document; further windows would just be
+                # shrinking, redundant suffixes of the tail already captured.
+                break
+            # Advance from the (possibly trimmed) end, not the fixed step, so the
+            # next chunk also starts on a word boundary instead of drifting mid-word.
+            start = max(start + 1, end - overlap)
+        else:
+            start += step
 
     return chunks
 
@@ -372,6 +403,11 @@ def main() -> None:
     )
     parser.add_argument("--vector-store", choices=["numpy", "faiss"], default="numpy")
     parser.add_argument("--generate-with-llm", action="store_true", help="Call OpenAI for final generation")
+    parser.add_argument(
+        "--respect-word-boundaries",
+        action="store_true",
+        help="Trim chunks back to the previous space instead of splitting a word in half",
+    )
     args = parser.parse_args()
 
     doc_path = Path(args.doc)
@@ -381,7 +417,12 @@ def main() -> None:
     text = doc_path.read_text(encoding="utf-8")
 
     # 1) Chunking
-    chunks = chunk_text(text, chunk_size=args.chunk_size, overlap=args.overlap)
+    chunks = chunk_text(
+        text,
+        chunk_size=args.chunk_size,
+        overlap=args.overlap,
+        respect_word_boundaries=args.respect_word_boundaries,
+    )
 
     # 2) Embeddings
     embedder = choose_embedder(args.embedder)

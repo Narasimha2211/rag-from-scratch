@@ -46,6 +46,33 @@ def test_chunk_text_invalid_args_raise(chunk_size, overlap):
         chunk_text("some text", chunk_size=chunk_size, overlap=overlap)
 
 
+def test_chunk_text_default_can_split_a_word_in_half():
+    text = "hello there friend"
+    chunks = chunk_text(text, chunk_size=8, overlap=0)
+    assert chunks[0] == "hello th"  # cuts "there" mid-word
+
+
+def test_chunk_text_respect_word_boundaries_avoids_splitting_words():
+    text = "hello there friend"
+    chunks = chunk_text(text, chunk_size=8, overlap=0, respect_word_boundaries=True)
+    assert chunks == ["hello", "there", "friend"]
+
+
+def test_chunk_text_respect_word_boundaries_keeps_all_words_intact():
+    text = "the quick brown fox jumps over the lazy dog"
+    chunks = chunk_text(text, chunk_size=10, overlap=0, respect_word_boundaries=True)
+    for chunk in chunks:
+        assert all(word in text.split() for word in chunk.split())
+    assert " ".join(chunks) == text
+
+
+def test_chunk_text_respect_word_boundaries_still_splits_a_word_longer_than_chunk_size():
+    # No whitespace to trim back to, so a single overlong word is an unavoidable exception.
+    text = "supercalifragilistic expialidocious"
+    chunks = chunk_text(text, chunk_size=12, overlap=0, respect_word_boundaries=True)
+    assert chunks[0] == "supercalifra"
+
+
 # -----------------------------
 # l2_normalize
 # -----------------------------
