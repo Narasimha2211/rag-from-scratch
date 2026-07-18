@@ -1,5 +1,7 @@
 # My RAG Learning Project (From Scratch)
 
+[![tests](https://github.com/Narasimha2211/rag-from-scratch/actions/workflows/tests.yml/badge.svg)](https://github.com/Narasimha2211/rag-from-scratch/actions/workflows/tests.yml)
+
 I built this project to **learn Retrieval-Augmented Generation (RAG) deeply** by implementing each step myself in Python, without high-level orchestration frameworks.
 
 ## Why I built this
@@ -66,14 +68,14 @@ python rag_from_scratch.py --query "Why do we use overlap in chunking?"
 python -m streamlit run streamlit_app.py
 ```
 
-4. Run tests:
+4. Run tests (with coverage):
 
 ```bash
 pip install -r requirements-dev.txt
-pytest -v
+pytest -v --cov=rag_from_scratch --cov-report=term-missing
 ```
 
-Tests run automatically on every push/PR via [GitHub Actions](.github/workflows/tests.yml).
+Tests and linting (`ruff`) run automatically on every push/PR via [GitHub Actions](.github/workflows/tests.yml).
 
 ---
 

@@ -29,6 +29,6 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - name: Install dependencies
-        run: pip install numpy pytest
-      - name: Run tests
-        run: pytest -v
+        run: pip install numpy pytest pytest-cov
+      - name: Run tests with coverage
+        run: pytest -v --cov=rag_from_scratch --cov-report=term-missing
