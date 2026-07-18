@@ -30,7 +30,6 @@ from typing import List
 
 import numpy as np
 
-
 # -----------------------------
 # 1) DOCUMENT CHUNKING
 # -----------------------------

@@ -1,4 +1,3 @@
-import tempfile
 from pathlib import Path
 
 import streamlit as st
@@ -7,8 +6,8 @@ from rag_from_scratch import (
     FaissVectorStore,
     NumpyVectorStore,
     build_grounded_prompt,
-    chunk_text,
     choose_embedder,
+    chunk_text,
     generate_with_openai,
     simple_grounded_answer,
 )

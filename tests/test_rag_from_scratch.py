@@ -9,13 +9,12 @@ import pytest
 from rag_from_scratch import (
     HashingEmbedder,
     NumpyVectorStore,
+    RetrievedChunk,
     build_grounded_prompt,
     chunk_text,
     l2_normalize,
     simple_grounded_answer,
-    RetrievedChunk,
 )
-
 
 # -----------------------------
 # chunk_text
