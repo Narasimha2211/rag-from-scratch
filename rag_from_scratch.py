@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import math
 import os
 import re
 from dataclasses import dataclass
@@ -272,6 +273,145 @@ class FaissVectorStore:
 
 
 # -----------------------------
+# 3b) SPARSE RETRIEVAL (BM25) + HYBRID FUSION
+# -----------------------------
+#
+# Dense embedding search is weak on exact keyword/entity matches (rare terms,
+# IDs, names) because those get diluted into a fixed-size vector. Sparse
+# lexical retrieval (BM25) is weak on synonyms/paraphrase. RAG research
+# consistently finds that combining both, fused by rank rather than raw
+# score, beats either alone:
+#   - Cormack, Clarke & Buettcher (2009), "Reciprocal Rank Fusion outperforms
+#     Condorcet and Individual Rank Learning Methods" -- source of the RRF
+#     formula used below (k=60).
+#   - 2025-2026 RAG surveys/benchmarks (e.g. arXiv:2506.00054) report hybrid
+#     retrieval + reranking as the highest-ROI upgrade over naive single-method
+#     retrieval, and one 2026 benchmark found BM25 alone outperformed a
+#     state-of-the-art dense retriever on most metrics for keyword-heavy
+#     (financial) documents.
+
+
+def _tokenize(text: str) -> List[str]:
+    return re.findall(r"[a-zA-Z0-9]+", text.lower())
+
+
+class BM25:
+    """
+    Okapi BM25 sparse (lexical) retriever, implemented from scratch.
+
+    Scores chunks by term overlap with the query, weighting rarer
+    (more discriminative) terms higher via inverse document frequency,
+    and normalizing for document length so long chunks aren't favored
+    just for containing more words.
+    """
+
+    def __init__(self, chunks: List[str], k1: float = 1.5, b: float = 0.75) -> None:
+        self.k1 = k1
+        self.b = b
+        self.chunks = chunks
+        self.doc_tokens = [_tokenize(c) for c in chunks]
+        self.doc_lengths = [len(toks) for toks in self.doc_tokens]
+        self.avg_doc_length = (sum(self.doc_lengths) / len(self.doc_lengths)) if self.doc_lengths else 0.0
+
+        doc_freq: dict[str, int] = {}
+        for toks in self.doc_tokens:
+            for term in set(toks):
+                doc_freq[term] = doc_freq.get(term, 0) + 1
+
+        n_docs = len(self.doc_tokens)
+        # "+1" idf variant (as used by e.g. Lucene's BM25Similarity) keeps idf
+        # non-negative even for terms that appear in most documents.
+        self.idf = {term: math.log(1 + (n_docs - df + 0.5) / (df + 0.5)) for term, df in doc_freq.items()}
+
+    def score(self, query: str) -> np.ndarray:
+        query_terms = _tokenize(query)
+        scores = np.zeros(len(self.doc_tokens), dtype=np.float32)
+
+        for i, toks in enumerate(self.doc_tokens):
+            if not toks:
+                continue
+
+            term_freq: dict[str, int] = {}
+            for t in toks:
+                term_freq[t] = term_freq.get(t, 0) + 1
+
+            length_norm = 1 - self.b + self.b * (self.doc_lengths[i] / self.avg_doc_length)
+
+            doc_score = 0.0
+            for term in query_terms:
+                freq = term_freq.get(term)
+                if not freq:
+                    continue
+                idf = self.idf.get(term, 0.0)
+                doc_score += idf * (freq * (self.k1 + 1)) / (freq + self.k1 * length_norm)
+            scores[i] = doc_score
+
+        return scores
+
+    def search(self, query: str, top_k: int = 3) -> List[RetrievedChunk]:
+        scores = self.score(query)
+        if len(scores) == 0:
+            return []
+
+        candidate_k = min(top_k, len(scores))
+        idx = np.argpartition(-scores, kth=candidate_k - 1)[:candidate_k]
+        idx = idx[np.argsort(-scores[idx])]
+
+        return [
+            RetrievedChunk(chunk_id=int(i), score=float(scores[i]), text=self.chunks[int(i)])
+            for i in idx
+            if scores[i] > 0.0  # no lexical overlap at all -- not a real match
+        ]
+
+
+def reciprocal_rank_fusion(
+    rankings: List[List[RetrievedChunk]],
+    top_k: int = 3,
+    k: int = 60,
+) -> List[RetrievedChunk]:
+    """
+    Fuse multiple ranked result lists (e.g. dense + BM25) into one ranking.
+
+    Each chunk earns 1 / (k + rank) from each list it appears in (rank is
+    1-indexed); scores are summed across lists. Using rank instead of the
+    raw similarity/BM25 score avoids having to make the two scales
+    comparable, and lets a chunk that ranks well in *either* retriever surface
+    near the top -- this is what lets hybrid search catch cases either
+    method misses alone.
+    """
+    fused_scores: dict[int, float] = {}
+    chunk_text_by_id: dict[int, str] = {}
+
+    for ranking in rankings:
+        for rank, item in enumerate(ranking, start=1):
+            fused_scores[item.chunk_id] = fused_scores.get(item.chunk_id, 0.0) + 1.0 / (k + rank)
+            chunk_text_by_id[item.chunk_id] = item.text
+
+    ranked_ids = sorted(fused_scores, key=lambda cid: fused_scores[cid], reverse=True)[:top_k]
+
+    return [RetrievedChunk(chunk_id=cid, score=fused_scores[cid], text=chunk_text_by_id[cid]) for cid in ranked_ids]
+
+
+class HybridRetriever:
+    """Combines a dense vector store with BM25 sparse search via Reciprocal Rank Fusion."""
+
+    def __init__(self, vector_store, bm25: BM25) -> None:
+        self.vector_store = vector_store
+        self.bm25 = bm25
+
+    def search(
+        self,
+        query: str,
+        query_vector: np.ndarray,
+        top_k: int = 3,
+        fetch_k: int = 10,
+    ) -> List[RetrievedChunk]:
+        dense_results = self.vector_store.search(query_vector, top_k=fetch_k)
+        sparse_results = self.bm25.search(query, top_k=fetch_k)
+        return reciprocal_rank_fusion([dense_results, sparse_results], top_k=top_k)
+
+
+# -----------------------------
 # 4) RETRIEVAL + 5) AUGMENTATION
 # -----------------------------
 
@@ -408,6 +548,12 @@ def main() -> None:
         action="store_true",
         help="Trim chunks back to the previous space instead of splitting a word in half",
     )
+    parser.add_argument(
+        "--retrieval",
+        choices=["dense", "hybrid"],
+        default="dense",
+        help="'hybrid' fuses dense vector search with BM25 keyword search via Reciprocal Rank Fusion",
+    )
     args = parser.parse_args()
 
     doc_path = Path(args.doc)
@@ -438,7 +584,11 @@ def main() -> None:
 
     # 4) Retrieval
     query_vector = embedder.encode([args.query])[0]
-    retrieved = store.search(query_vector, top_k=args.top_k)
+    if args.retrieval == "hybrid":
+        retriever = HybridRetriever(store, BM25(chunks))
+        retrieved = retriever.search(args.query, query_vector, top_k=args.top_k, fetch_k=max(10, args.top_k * 3))
+    else:
+        retrieved = store.search(query_vector, top_k=args.top_k)
 
     # 5) Augmentation (context injection)
     prompt = build_grounded_prompt(args.query, retrieved)
@@ -454,6 +604,7 @@ def main() -> None:
     print(f"Chunks created: {len(chunks)}")
     print(f"Embedder: {args.embedder}")
     print(f"Vector store: {args.vector_store}")
+    print(f"Retrieval: {args.retrieval}")
 
     print("\n--- Top Retrieved Chunks ---")
     for item in retrieved:

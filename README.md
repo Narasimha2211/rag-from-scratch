@@ -23,7 +23,7 @@ This helped me understand how RAG reduces hallucinations by grounding the answer
 ### 1) CLI pipeline
 File: [rag_from_scratch.py](rag_from_scratch.py)
 
-- Chunking with overlap
+- Chunking with overlap (optionally word-boundary aware)
 - Embedders:
   - `hashing` (offline fallback)
   - `sentence-transformers` (local model)
@@ -31,6 +31,10 @@ File: [rag_from_scratch.py](rag_from_scratch.py)
 - Vector stores:
   - `numpy` (manual cosine similarity)
   - `faiss` (fast ANN-style retrieval)
+- Retrieval modes:
+  - `dense` — vector similarity search only
+  - `hybrid` — dense search + a from-scratch BM25 sparse retriever, fused with
+    Reciprocal Rank Fusion (`--retrieval hybrid`)
 - Prompt building that enforces:
   - “use only provided context”
   - abstain when evidence is missing
@@ -44,7 +48,35 @@ Interactive UI to experiment with:
 - top-k retrieval
 - embedder choice
 - vector store choice
+- retrieval mode (dense vs. hybrid)
 - optional LLM generation
+
+---
+
+## Hybrid retrieval (dense + BM25)
+
+Dense embedding search is weak on exact keyword/entity matches (rare terms,
+IDs, names) since they get diluted into a fixed-size vector. Sparse lexical
+search (BM25) is weak on synonyms and paraphrase. Recent RAG research
+consistently finds that combining both outperforms either alone:
+
+- Cormack, Clarke & Buettcher (2009), *Reciprocal Rank Fusion outperforms
+  Condorcet and Individual Rank Learning Methods* — source of the RRF fusion
+  formula (`score = Σ 1 / (k + rank)`, `k=60`) used here.
+- 2025–2026 RAG surveys (e.g. [arXiv:2506.00054](https://arxiv.org/abs/2506.00054))
+  and benchmark studies report hybrid retrieval + reranking as the
+  highest-ROI upgrade over naive single-method retrieval — one 2026 benchmark
+  found BM25 alone even outperformed a state-of-the-art dense retriever on
+  most metrics for keyword-heavy documents.
+
+Try it:
+
+```bash
+python rag_from_scratch.py --query "Why do we use overlap in chunking?" --retrieval hybrid
+```
+
+Both `BM25` and `reciprocal_rank_fusion` are implemented from scratch in
+[rag_from_scratch.py](rag_from_scratch.py), no extra dependency required.
 
 ---
 

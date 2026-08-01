@@ -3,7 +3,9 @@ from pathlib import Path
 import streamlit as st
 
 from rag_from_scratch import (
+    BM25,
     FaissVectorStore,
+    HybridRetriever,
     NumpyVectorStore,
     build_grounded_prompt,
     choose_embedder,
@@ -24,6 +26,12 @@ with st.sidebar:
     overlap = st.slider("Overlap", min_value=0, max_value=400, value=90, step=10)
     top_k = st.slider("Top-K", min_value=1, max_value=8, value=3, step=1)
     respect_word_boundaries = st.checkbox("Respect word boundaries when chunking", value=False)
+    retrieval_mode = st.selectbox(
+        "Retrieval",
+        ["dense", "hybrid"],
+        index=0,
+        help="Hybrid fuses dense vector search with BM25 keyword search via Reciprocal Rank Fusion",
+    )
     use_llm = st.checkbox("Generate with OpenAI LLM", value=False)
 
 st.subheader("1) Document")
@@ -67,7 +75,13 @@ if st.button("Run RAG", type="primary"):
 
         store.add(chunk_vectors, chunks)
         query_vector = embedder.encode([query])[0]
-        retrieved = store.search(query_vector, top_k=top_k)
+
+        if retrieval_mode == "hybrid":
+            retriever = HybridRetriever(store, BM25(chunks))
+            retrieved = retriever.search(query, query_vector, top_k=top_k, fetch_k=max(10, top_k * 3))
+        else:
+            retrieved = store.search(query_vector, top_k=top_k)
+
         prompt = build_grounded_prompt(query, retrieved)
 
         if use_llm:

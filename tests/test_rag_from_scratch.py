@@ -7,12 +7,15 @@ import numpy as np
 import pytest
 
 from rag_from_scratch import (
+    BM25,
     HashingEmbedder,
+    HybridRetriever,
     NumpyVectorStore,
     RetrievedChunk,
     build_grounded_prompt,
     chunk_text,
     l2_normalize,
+    reciprocal_rank_fusion,
     simple_grounded_answer,
 )
 
@@ -194,3 +197,100 @@ def test_simple_grounded_answer_picks_overlapping_sentence():
 
 def test_simple_grounded_answer_abstains_when_no_evidence():
     assert simple_grounded_answer("anything", []) == "I don't know based on the provided context."
+
+
+# -----------------------------
+# BM25
+# -----------------------------
+
+def test_bm25_only_returns_chunks_with_lexical_overlap():
+    chunks = [
+        "cats are great pets",
+        "dogs are great pets",
+        "the secret keyword is glorbnax",
+    ]
+    bm25 = BM25(chunks)
+    results = bm25.search("glorbnax", top_k=3)
+    assert [r.chunk_id for r in results] == [2]
+
+
+def test_bm25_idf_weights_rare_terms_higher_than_common_terms():
+    chunks = [
+        "common word appears here",
+        "common word appears here too",
+        "common word appears here as well",
+        "a rareterm shows up only once",
+    ]
+    bm25 = BM25(chunks)
+    assert bm25.idf["rareterm"] > bm25.idf["common"]
+
+
+def test_bm25_search_on_no_chunks_returns_empty():
+    bm25 = BM25([])
+    assert bm25.search("anything", top_k=3) == []
+
+
+# -----------------------------
+# reciprocal_rank_fusion
+# -----------------------------
+
+def test_reciprocal_rank_fusion_combines_two_rankings():
+    dense = [
+        RetrievedChunk(chunk_id=0, score=0.9, text="a"),
+        RetrievedChunk(chunk_id=1, score=0.5, text="b"),
+    ]
+    sparse = [
+        RetrievedChunk(chunk_id=1, score=10.0, text="b"),
+        RetrievedChunk(chunk_id=2, score=5.0, text="c"),
+    ]
+    fused = reciprocal_rank_fusion([dense, sparse], top_k=3)
+    # chunk 1 ranks in both lists, so it should out-rank chunks that only appear once.
+    assert [r.chunk_id for r in fused] == [1, 0, 2]
+
+
+def test_reciprocal_rank_fusion_respects_top_k():
+    dense = [RetrievedChunk(chunk_id=i, score=1.0, text=str(i)) for i in range(5)]
+    fused = reciprocal_rank_fusion([dense], top_k=2)
+    assert len(fused) == 2
+
+
+# -----------------------------
+# HybridRetriever
+# -----------------------------
+
+class _StubDenseStore:
+    """A dense retriever stand-in that never surfaces the keyword-match chunk,
+    simulating an embedder whose vector space misses an exact/rare term."""
+
+    def __init__(self, ranking):
+        self._ranking = ranking
+
+    def search(self, query_vector, top_k=3):
+        return self._ranking[:top_k]
+
+
+def test_hybrid_retriever_surfaces_exact_keyword_match_dense_search_missed():
+    chunks = [
+        "completely unrelated text about the weather today",
+        "another unrelated paragraph about gardening",
+        "yet another paragraph about cooking recipes",
+        "the secret keyword is glorbnax and nothing else",
+    ]
+    bm25 = BM25(chunks)
+    # Dense search never surfaces chunk 3 at all -- simulates an embedder whose
+    # vector space has no signal for the rare term "glorbnax".
+    stub_dense = _StubDenseStore(
+        [
+            RetrievedChunk(chunk_id=0, score=0.9, text=chunks[0]),
+            RetrievedChunk(chunk_id=1, score=0.8, text=chunks[1]),
+            RetrievedChunk(chunk_id=2, score=0.7, text=chunks[2]),
+        ]
+    )
+    retriever = HybridRetriever(stub_dense, bm25)
+
+    results = retriever.search("glorbnax", query_vector=np.zeros(4, dtype=np.float32), top_k=2, fetch_k=10)
+
+    # Dense-only retrieval (top_k=2 of stub_dense) would never include chunk 3;
+    # hybrid must pull it in via the BM25 side despite it ranking last in RRF math
+    # among a 3-item dense list.
+    assert 3 in [r.chunk_id for r in results]

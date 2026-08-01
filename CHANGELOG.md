@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Added hybrid retrieval: a from-scratch `BM25` sparse retriever fused with dense vector
+  search via `reciprocal_rank_fusion` (Cormack, Clarke & Buettcher, 2009). Grounded in
+  2025–2026 RAG survey/benchmark findings that hybrid + fusion is the highest-ROI upgrade
+  over single-method retrieval. Available via CLI `--retrieval hybrid` and a Streamlit
+  retrieval-mode selector.
 - Added coverage reporting to CI (`pytest-cov`) and a CI status badge in the README.
 - Added an optional `respect_word_boundaries` chunking mode (CLI `--respect-word-boundaries`,
   Streamlit checkbox) so chunk edges land on whitespace instead of splitting a word in half.
