@@ -138,7 +138,17 @@ pip install -r requirements-dev.txt
 pytest -v --cov=rag_from_scratch --cov-report=term-missing
 ```
 
-Tests and linting (`ruff`) run automatically on every push/PR via [GitHub Actions](.github/workflows/tests.yml).
+Tests, linting (`ruff`), and type checking (`mypy`) run automatically on every push/PR via
+[GitHub Actions](.github/workflows/tests.yml).
+
+Or use the `Makefile` shortcuts once dev dependencies are installed:
+
+```bash
+make check      # lint + typecheck + test (what CI runs)
+make coverage   # test with coverage report
+make run        # run the CLI with a sample query
+make streamlit  # launch the Streamlit app
+```
 
 ---
 
