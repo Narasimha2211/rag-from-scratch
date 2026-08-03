@@ -35,6 +35,10 @@ File: [rag_from_scratch.py](rag_from_scratch.py)
   - `dense` — vector similarity search only
   - `hybrid` — dense search + a from-scratch BM25 sparse retriever, fused with
     Reciprocal Rank Fusion (`--retrieval hybrid`)
+- Rerankers (`--rerank`):
+  - `none` (default)
+  - `lexical` — dependency-free, rescoring the shortlist with BM25
+  - `cross-encoder` — optional, `sentence-transformers` CrossEncoder
 - Prompt building that enforces:
   - “use only provided context”
   - abstain when evidence is missing
@@ -49,34 +53,43 @@ Interactive UI to experiment with:
 - embedder choice
 - vector store choice
 - retrieval mode (dense vs. hybrid)
+- reranker (none / lexical / cross-encoder)
 - optional LLM generation
 
 ---
 
-## Hybrid retrieval (dense + BM25)
+## Hybrid retrieval + reranking
 
 Dense embedding search is weak on exact keyword/entity matches (rare terms,
 IDs, names) since they get diluted into a fixed-size vector. Sparse lexical
 search (BM25) is weak on synonyms and paraphrase. Recent RAG research
-consistently finds that combining both outperforms either alone:
+consistently finds that combining both, then reranking the combined
+shortlist, outperforms any single method:
 
 - Cormack, Clarke & Buettcher (2009), *Reciprocal Rank Fusion outperforms
   Condorcet and Individual Rank Learning Methods* — source of the RRF fusion
   formula (`score = Σ 1 / (k + rank)`, `k=60`) used here.
 - 2025–2026 RAG surveys (e.g. [arXiv:2506.00054](https://arxiv.org/abs/2506.00054))
-  and benchmark studies report hybrid retrieval + reranking as the
-  highest-ROI upgrade over naive single-method retrieval — one 2026 benchmark
-  found BM25 alone even outperformed a state-of-the-art dense retriever on
-  most metrics for keyword-heavy documents.
+  and benchmark studies report hybrid retrieval + reranking as the two
+  highest-ROI additions over naive single-method retrieval — one 2026
+  benchmark measured +17.4% relative Recall@5 from adding reranking on top of
+  hybrid retrieval alone, and found BM25 alone even outperformed a
+  state-of-the-art dense retriever on most metrics for keyword-heavy documents.
+
+A reranker scores each `(query, chunk)` pair jointly instead of comparing
+independently-computed vectors, which is why it's applied as a second pass
+over a retriever's shortlist rather than as the retriever itself.
 
 Try it:
 
 ```bash
-python rag_from_scratch.py --query "Why do we use overlap in chunking?" --retrieval hybrid
+python rag_from_scratch.py --query "Why do we use overlap in chunking?" --retrieval hybrid --rerank lexical
 ```
 
-Both `BM25` and `reciprocal_rank_fusion` are implemented from scratch in
-[rag_from_scratch.py](rag_from_scratch.py), no extra dependency required.
+`BM25`, `reciprocal_rank_fusion`, and `LexicalOverlapReranker` are all
+implemented from scratch in [rag_from_scratch.py](rag_from_scratch.py) —
+no extra dependency required. `CrossEncoderReranker` is optional
+(`sentence-transformers`).
 
 ---
 

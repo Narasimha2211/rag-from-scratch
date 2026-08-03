@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Added reranking (`--rerank {none,lexical,cross-encoder}`): `LexicalOverlapReranker`
+  (dependency-free, reuses BM25 over the candidate shortlist) and `CrossEncoderReranker`
+  (optional, `sentence-transformers`). Completes the "hybrid retrieval + reranking" pairing
+  that 2025–2026 RAG research reports as the two highest-ROI additions over naive retrieval.
 - Added hybrid retrieval: a from-scratch `BM25` sparse retriever fused with dense vector
   search via `reciprocal_rank_fusion` (Cormack, Clarke & Buettcher, 2009). Grounded in
   2025–2026 RAG survey/benchmark findings that hybrid + fusion is the highest-ROI upgrade

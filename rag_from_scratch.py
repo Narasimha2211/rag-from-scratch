@@ -643,6 +643,12 @@ def main() -> None:
         default="dense",
         help="'hybrid' fuses dense vector search with BM25 keyword search via Reciprocal Rank Fusion",
     )
+    parser.add_argument(
+        "--rerank",
+        choices=["none", "lexical", "cross-encoder"],
+        default="none",
+        help="Rescore a broader candidate shortlist before taking the final top-k",
+    )
     args = parser.parse_args()
 
     doc_path = Path(args.doc)
@@ -673,11 +679,21 @@ def main() -> None:
 
     # 4) Retrieval
     query_vector = embedder.encode([args.query])[0]
+    reranker = choose_reranker(args.rerank)
+    # When reranking, fetch a broader shortlist first so the reranker has
+    # something worth rescoring instead of just re-sorting the final top-k.
+    retrieval_k = max(10, args.top_k * 3) if reranker else args.top_k
+
     if args.retrieval == "hybrid":
         retriever = HybridRetriever(store, BM25(chunks))
-        retrieved = retriever.search(args.query, query_vector, top_k=args.top_k, fetch_k=max(10, args.top_k * 3))
+        retrieved = retriever.search(
+            args.query, query_vector, top_k=retrieval_k, fetch_k=max(10, retrieval_k * 3)
+        )
     else:
-        retrieved = store.search(query_vector, top_k=args.top_k)
+        retrieved = store.search(query_vector, top_k=retrieval_k)
+
+    if reranker:
+        retrieved = reranker.rerank(args.query, retrieved, top_k=args.top_k)
 
     # 5) Augmentation (context injection)
     prompt = build_grounded_prompt(args.query, retrieved)
@@ -694,6 +710,7 @@ def main() -> None:
     print(f"Embedder: {args.embedder}")
     print(f"Vector store: {args.vector_store}")
     print(f"Retrieval: {args.retrieval}")
+    print(f"Reranker: {args.rerank}")
 
     print("\n--- Top Retrieved Chunks ---")
     for item in retrieved:

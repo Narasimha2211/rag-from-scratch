@@ -9,6 +9,7 @@ from rag_from_scratch import (
     NumpyVectorStore,
     build_grounded_prompt,
     choose_embedder,
+    choose_reranker,
     chunk_text,
     generate_with_openai,
     simple_grounded_answer,
@@ -31,6 +32,12 @@ with st.sidebar:
         ["dense", "hybrid"],
         index=0,
         help="Hybrid fuses dense vector search with BM25 keyword search via Reciprocal Rank Fusion",
+    )
+    rerank_name = st.selectbox(
+        "Reranker",
+        ["none", "lexical", "cross-encoder"],
+        index=0,
+        help="Rescores a broader candidate shortlist before taking the final top-k",
     )
     use_llm = st.checkbox("Generate with OpenAI LLM", value=False)
 
@@ -76,11 +83,21 @@ if st.button("Run RAG", type="primary"):
         store.add(chunk_vectors, chunks)
         query_vector = embedder.encode([query])[0]
 
+        reranker = choose_reranker(rerank_name)
+        # When reranking, fetch a broader shortlist first so the reranker has
+        # something worth rescoring instead of just re-sorting the final top-k.
+        retrieval_k = max(10, top_k * 3) if reranker else top_k
+
         if retrieval_mode == "hybrid":
             retriever = HybridRetriever(store, BM25(chunks))
-            retrieved = retriever.search(query, query_vector, top_k=top_k, fetch_k=max(10, top_k * 3))
+            retrieved = retriever.search(
+                query, query_vector, top_k=retrieval_k, fetch_k=max(10, retrieval_k * 3)
+            )
         else:
-            retrieved = store.search(query_vector, top_k=top_k)
+            retrieved = store.search(query_vector, top_k=retrieval_k)
+
+        if reranker:
+            retrieved = reranker.rerank(query, retrieved, top_k=top_k)
 
         prompt = build_grounded_prompt(query, retrieved)
 
