@@ -10,9 +10,11 @@ from rag_from_scratch import (
     BM25,
     HashingEmbedder,
     HybridRetriever,
+    LexicalOverlapReranker,
     NumpyVectorStore,
     RetrievedChunk,
     build_grounded_prompt,
+    choose_reranker,
     chunk_text,
     l2_normalize,
     reciprocal_rank_fusion,
@@ -294,3 +296,49 @@ def test_hybrid_retriever_surfaces_exact_keyword_match_dense_search_missed():
     # hybrid must pull it in via the BM25 side despite it ranking last in RRF math
     # among a 3-item dense list.
     assert 3 in [r.chunk_id for r in results]
+
+
+# -----------------------------
+# Reranking
+# -----------------------------
+
+def test_lexical_overlap_reranker_reorders_by_query_overlap():
+    # Original ranking (e.g. from a weak dense retriever) puts the irrelevant
+    # chunk first; the reranker should fix that using lexical overlap.
+    candidates = [
+        RetrievedChunk(chunk_id=0, score=0.9, text="completely unrelated text about gardening"),
+        RetrievedChunk(chunk_id=1, score=0.1, text="the secret keyword is glorbnax"),
+    ]
+    reranker = LexicalOverlapReranker()
+    results = reranker.rerank("what is glorbnax", candidates, top_k=2)
+    assert results[0].chunk_id == 1
+
+
+def test_lexical_overlap_reranker_maps_back_to_original_chunk_ids():
+    # candidates[0] has chunk_id=5, candidates[1] has chunk_id=2 -- position in
+    # the candidates list must not leak into the returned chunk_id.
+    candidates = [
+        RetrievedChunk(chunk_id=5, score=0.9, text="apple banana"),
+        RetrievedChunk(chunk_id=2, score=0.1, text="the rare keyword is zorptastic"),
+    ]
+    reranker = LexicalOverlapReranker()
+    results = reranker.rerank("zorptastic", candidates, top_k=1)
+    assert results[0].chunk_id == 2
+
+
+def test_lexical_overlap_reranker_on_empty_candidates_returns_empty():
+    assert LexicalOverlapReranker().rerank("anything", [], top_k=3) == []
+
+
+def test_choose_reranker_none_returns_none():
+    assert choose_reranker(None) is None
+    assert choose_reranker("none") is None
+
+
+def test_choose_reranker_lexical_returns_lexical_reranker():
+    assert isinstance(choose_reranker("lexical"), LexicalOverlapReranker)
+
+
+def test_choose_reranker_unknown_raises():
+    with pytest.raises(ValueError):
+        choose_reranker("not-a-real-reranker")

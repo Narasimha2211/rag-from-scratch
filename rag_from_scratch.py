@@ -412,6 +412,95 @@ class HybridRetriever:
 
 
 # -----------------------------
+# 3c) RERANKING
+# -----------------------------
+#
+# RAG research consistently pairs hybrid retrieval with reranking as the two
+# highest-impact additions over naive single-pass retrieval (2025-2026 RAG
+# surveys/benchmarks; one 2026 benchmark measured hybrid + rerank at +17.4%
+# relative Recall@5 over hybrid alone). A reranker scores each (query, chunk)
+# pair jointly, which a bi-encoder embedder can't do since it encodes the
+# query and each chunk independently -- that's why rerankers are applied as a
+# second pass over a retriever's shortlist rather than as the retriever
+# itself (scoring every chunk in a corpus jointly with the query doesn't
+# scale).
+
+
+class BaseReranker:
+    def rerank(self, query: str, candidates: List[RetrievedChunk], top_k: int = 3) -> List[RetrievedChunk]:
+        raise NotImplementedError
+
+
+class LexicalOverlapReranker(BaseReranker):
+    """
+    Dependency-free reranker: re-scores a candidate shortlist with BM25
+    restricted to just that shortlist. Works anywhere (no extra install),
+    and is still a legitimate second pass -- it lets exact term overlap
+    correct a shortlist that a dense-only retriever ranked by embedding
+    similarity alone.
+    """
+
+    def rerank(self, query: str, candidates: List[RetrievedChunk], top_k: int = 3) -> List[RetrievedChunk]:
+        if not candidates:
+            return []
+
+        bm25 = BM25([c.text for c in candidates])
+        rescored = bm25.search(query, top_k=len(candidates))
+
+        # BM25 chunk_ids here are positions within `candidates`, not the
+        # original chunk_ids -- map back before returning.
+        return [
+            RetrievedChunk(chunk_id=candidates[r.chunk_id].chunk_id, score=r.score, text=r.text)
+            for r in rescored
+        ][:top_k]
+
+
+class CrossEncoderReranker(BaseReranker):
+    """
+    Cross-encoder reranking using sentence-transformers (if installed).
+
+    A cross-encoder scores the (query, chunk) pair through one joint forward
+    pass, which is typically far more accurate than cosine similarity of
+    independently-computed embeddings, at the cost of being too slow to run
+    over an entire corpus -- hence applying it only to a retriever's
+    shortlist.
+    """
+
+    def __init__(self, model_name: str = "cross-encoder/ms-marco-MiniLM-L-6-v2") -> None:
+        try:
+            from sentence_transformers import CrossEncoder  # type: ignore[import-not-found]
+        except Exception as exc:
+            raise RuntimeError(
+                "sentence-transformers is not available. Install with: pip install sentence-transformers"
+            ) from exc
+
+        self.model = CrossEncoder(model_name)
+
+    def rerank(self, query: str, candidates: List[RetrievedChunk], top_k: int = 3) -> List[RetrievedChunk]:
+        if not candidates:
+            return []
+
+        pairs = [(query, c.text) for c in candidates]
+        scores = self.model.predict(pairs)
+
+        rescored = [
+            RetrievedChunk(chunk_id=c.chunk_id, score=float(s), text=c.text) for c, s in zip(candidates, scores)
+        ]
+        rescored.sort(key=lambda c: c.score, reverse=True)
+        return rescored[:top_k]
+
+
+def choose_reranker(name: str | None) -> BaseReranker | None:
+    if name is None or name == "none":
+        return None
+    if name == "lexical":
+        return LexicalOverlapReranker()
+    if name == "cross-encoder":
+        return CrossEncoderReranker()
+    raise ValueError(f"Unknown reranker: {name}")
+
+
+# -----------------------------
 # 4) RETRIEVAL + 5) AUGMENTATION
 # -----------------------------
 
