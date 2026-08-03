@@ -8,3 +8,14 @@ target-version = "py310"
 
 [tool.ruff.lint]
 select = ["E", "F", "I"]
+
+[tool.mypy]
+python_version = "3.12"
+warn_unused_ignores = true
+check_untyped_defs = true
+
+[[tool.mypy.overrides]]
+# Optional heavy dependencies not installed in every environment (CI's
+# type-check job only installs numpy); their absence isn't a real type error.
+module = ["streamlit", "faiss", "sentence_transformers", "openai"]
+ignore_missing_imports = true

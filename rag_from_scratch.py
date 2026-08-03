@@ -27,7 +27,7 @@ import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List
+from typing import Any, List
 
 import numpy as np
 
@@ -115,7 +115,7 @@ class SentenceTransformerEmbedder(BaseEmbedder):
 
     def __init__(self, model_name: str = "all-MiniLM-L6-v2") -> None:
         try:
-            from sentence_transformers import SentenceTransformer  # type: ignore[import-not-found]
+            from sentence_transformers import SentenceTransformer
         except Exception as exc:
             raise RuntimeError(
                 "sentence-transformers is not available. "
@@ -138,7 +138,7 @@ class OpenAIEmbedder(BaseEmbedder):
             raise RuntimeError("OPENAI_API_KEY is not set")
 
         try:
-            from openai import OpenAI  # type: ignore[import-not-found]
+            from openai import OpenAI
         except Exception as exc:
             raise RuntimeError("openai package not available. Install with: pip install openai") from exc
 
@@ -238,12 +238,12 @@ class NumpyVectorStore:
 class FaissVectorStore:
     def __init__(self) -> None:
         try:
-            import faiss  # type: ignore
+            import faiss
         except Exception as exc:
             raise RuntimeError("faiss is not available. Install with: pip install faiss-cpu") from exc
 
         self.faiss = faiss
-        self.index = None
+        self.index: Any = None
         self.chunks: List[str] = []
 
     def add(self, vectors: np.ndarray, chunks: List[str]) -> None:
@@ -468,7 +468,7 @@ class CrossEncoderReranker(BaseReranker):
 
     def __init__(self, model_name: str = "cross-encoder/ms-marco-MiniLM-L-6-v2") -> None:
         try:
-            from sentence_transformers import CrossEncoder  # type: ignore[import-not-found]
+            from sentence_transformers import CrossEncoder
         except Exception as exc:
             raise RuntimeError(
                 "sentence-transformers is not available. Install with: pip install sentence-transformers"
@@ -589,7 +589,7 @@ def generate_with_openai(prompt: str, model: str = "gpt-4o-mini") -> str:
         return "OPENAI_API_KEY not set. Skipping LLM call."
 
     try:
-        from openai import OpenAI  # type: ignore[import-not-found]
+        from openai import OpenAI
     except Exception:
         return "openai package not available. Install with: pip install openai"
 
@@ -670,6 +670,7 @@ def main() -> None:
     chunk_vectors = embedder.encode(chunks)
 
     # 3) Store vectors
+    store: FaissVectorStore | NumpyVectorStore
     if args.vector_store == "faiss":
         store = FaissVectorStore()
     else:

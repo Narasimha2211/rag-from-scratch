@@ -75,6 +75,7 @@ if st.button("Run RAG", type="primary"):
         embedder = choose_embedder(embedder_name)
         chunk_vectors = embedder.encode(chunks)
 
+        store: FaissVectorStore | NumpyVectorStore
         if vector_store_name == "faiss":
             store = FaissVectorStore()
         else:
