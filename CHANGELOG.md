@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Added mypy static type checking with a dedicated CI job; fixed the issues it caught
+  (implicit `None` typing on `FaissVectorStore.index`, a `store` variable inferred from only
+  one branch of an if/else) and dropped now-redundant inline `# type: ignore` comments in
+  favor of per-module overrides in `pyproject.toml`.
+- Added `NumpyVectorStore.save`/`.load` (`--save-index`/`--load-index`) so a built index can
+  be persisted to disk instead of re-embedding on every run. Uses plain JSON for the chunk
+  texts (not pickle) so loading an index file can't execute arbitrary code.
 - Added reranking (`--rerank {none,lexical,cross-encoder}`): `LexicalOverlapReranker`
   (dependency-free, reuses BM25 over the candidate shortlist) and `CrossEncoderReranker`
   (optional, `sentence-transformers`). Completes the "hybrid retrieval + reranking" pairing

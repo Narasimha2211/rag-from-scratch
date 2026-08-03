@@ -168,6 +168,33 @@ def test_vector_store_search_on_empty_store_returns_empty():
     assert store.search(query, top_k=3) == []
 
 
+def test_vector_store_save_and_load_round_trips(tmp_path):
+    store = NumpyVectorStore()
+    vectors = np.array([[1.0, 0.0], [0.0, 1.0], [0.9, 0.1]], dtype=np.float32)
+    store.add(vectors, ["chunk-a", "chunk-b", "chunk-c"])
+
+    index_path = tmp_path / "my_index"
+    store.save(index_path)
+    loaded = NumpyVectorStore.load(index_path)
+
+    assert loaded.chunks == store.chunks
+    np.testing.assert_array_equal(loaded.matrix, store.matrix)
+
+    query = np.array([1.0, 0.0], dtype=np.float32)
+    assert [r.text for r in loaded.search(query, top_k=2)] == [r.text for r in store.search(query, top_k=2)]
+
+
+def test_vector_store_save_without_data_raises(tmp_path):
+    store = NumpyVectorStore()
+    with pytest.raises(ValueError):
+        store.save(tmp_path / "empty_index")
+
+
+def test_vector_store_load_missing_file_raises(tmp_path):
+    with pytest.raises(FileNotFoundError):
+        NumpyVectorStore.load(tmp_path / "does_not_exist")
+
+
 # -----------------------------
 # prompt building / fallback answer
 # -----------------------------

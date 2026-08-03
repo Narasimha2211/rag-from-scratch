@@ -93,6 +93,24 @@ no extra dependency required. `CrossEncoderReranker` is optional
 
 ---
 
+## Saving/loading an index
+
+Re-embedding on every run is wasteful once you're using a real embedder
+(API calls, a local transformer model). Save a built `numpy` index and
+reload it later instead:
+
+```bash
+python rag_from_scratch.py --embedder sentence-transformers --save-index my_index
+python rag_from_scratch.py --load-index my_index --query "..."
+```
+
+This writes `my_index.npz` (the embedding matrix) and
+`my_index.chunks.json` (the chunk texts) — plain JSON, not pickle, so
+loading your own index file can't execute arbitrary code. `--save-index`
+and `--load-index` only support `--vector-store numpy`.
+
+---
+
 ## Run locally
 
 1. Install dependencies:

@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import math
 import os
 import re
@@ -232,6 +233,38 @@ class NumpyVectorStore:
             RetrievedChunk(chunk_id=int(i), score=float(scores[i]), text=self.chunks[int(i)])
             for i in idx
         ]
+
+    def save(self, path: str | Path) -> None:
+        """
+        Persist the index to disk as `{path}.npz` (the embedding matrix) plus
+        `{path}.chunks.json` (the chunk texts), so a slow embedder (API calls,
+        a local transformer model) doesn't have to re-embed on every run.
+
+        Deliberately avoids pickling the chunks (`np.savez` with an object
+        array would need `allow_pickle=True` to load) -- plain JSON is enough
+        for a list of strings and doesn't risk executing arbitrary code from
+        an index file.
+        """
+        if self.matrix is None:
+            raise ValueError("Nothing to save -- call add() first")
+
+        base = Path(path)
+        np.savez(base.with_suffix(".npz"), matrix=self.matrix)
+        base.with_suffix(".chunks.json").write_text(json.dumps(self.chunks), encoding="utf-8")
+
+    @classmethod
+    def load(cls, path: str | Path) -> "NumpyVectorStore":
+        base = Path(path)
+        npz_path = base.with_suffix(".npz")
+        chunks_path = base.with_suffix(".chunks.json")
+        if not npz_path.exists() or not chunks_path.exists():
+            raise FileNotFoundError(f"No saved index found at '{path}' (expected {npz_path} and {chunks_path})")
+
+        store = cls()
+        with np.load(npz_path) as data:
+            store.matrix = data["matrix"]
+        store.chunks = json.loads(chunks_path.read_text(encoding="utf-8"))
+        return store
 
 
 # Optional FAISS variant for scale/performance
@@ -649,34 +682,59 @@ def main() -> None:
         default="none",
         help="Rescore a broader candidate shortlist before taking the final top-k",
     )
+    parser.add_argument(
+        "--save-index",
+        type=str,
+        default=None,
+        help="Save the built NumpyVectorStore to this path (as PATH.npz + PATH.chunks.json)",
+    )
+    parser.add_argument(
+        "--load-index",
+        type=str,
+        default=None,
+        help="Load a previously saved NumpyVectorStore instead of re-chunking/re-embedding --doc",
+    )
     args = parser.parse_args()
 
-    doc_path = Path(args.doc)
-    if not doc_path.exists():
-        raise FileNotFoundError(f"Document not found: {doc_path}")
-
-    text = doc_path.read_text(encoding="utf-8")
-
-    # 1) Chunking
-    chunks = chunk_text(
-        text,
-        chunk_size=args.chunk_size,
-        overlap=args.overlap,
-        respect_word_boundaries=args.respect_word_boundaries,
-    )
-
-    # 2) Embeddings
     embedder = choose_embedder(args.embedder)
-    chunk_vectors = embedder.encode(chunks)
-
-    # 3) Store vectors
     store: FaissVectorStore | NumpyVectorStore
-    if args.vector_store == "faiss":
-        store = FaissVectorStore()
-    else:
-        store = NumpyVectorStore()
 
-    store.add(chunk_vectors, chunks)
+    if args.load_index:
+        if args.vector_store == "faiss":
+            raise ValueError("--load-index only supports --vector-store numpy")
+        store = NumpyVectorStore.load(args.load_index)
+        chunks = store.chunks
+        source_label = f"loaded index: {args.load_index}"
+    else:
+        doc_path = Path(args.doc)
+        if not doc_path.exists():
+            raise FileNotFoundError(f"Document not found: {doc_path}")
+        text = doc_path.read_text(encoding="utf-8")
+        source_label = str(doc_path)
+
+        # 1) Chunking
+        chunks = chunk_text(
+            text,
+            chunk_size=args.chunk_size,
+            overlap=args.overlap,
+            respect_word_boundaries=args.respect_word_boundaries,
+        )
+
+        # 2) Embeddings
+        chunk_vectors = embedder.encode(chunks)
+
+        # 3) Store vectors
+        if args.vector_store == "faiss":
+            store = FaissVectorStore()
+        else:
+            store = NumpyVectorStore()
+
+        store.add(chunk_vectors, chunks)
+
+        if args.save_index:
+            if not isinstance(store, NumpyVectorStore):
+                raise ValueError("--save-index only supports --vector-store numpy")
+            store.save(args.save_index)
 
     # 4) Retrieval
     query_vector = embedder.encode([args.query])[0]
@@ -706,7 +764,7 @@ def main() -> None:
         answer = simple_grounded_answer(args.query, retrieved)
 
     print("\n=== MY RAG LEARNING PIPELINE ===")
-    print(f"Document: {doc_path}")
+    print(f"Source: {source_label}")
     print(f"Chunks created: {len(chunks)}")
     print(f"Embedder: {args.embedder}")
     print(f"Vector store: {args.vector_store}")
