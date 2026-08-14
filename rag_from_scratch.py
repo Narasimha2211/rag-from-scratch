@@ -600,6 +600,59 @@ def choose_reranker(name: str | None) -> BaseReranker | None:
 
 
 # -----------------------------
+# 3d) RETRIEVAL EVALUATION METRICS
+# -----------------------------
+#
+# The README/CHANGELOG cite external benchmarks for why hybrid retrieval and
+# reranking help; these two metrics let eval_retrieval.py measure recall and
+# rank quality on this project's own data instead of only taking those
+# claims on faith.
+
+
+def recall_at_k(retrieved: List[RetrievedChunk], relevant_ids: set[int], k: int | None = None) -> float:
+    """
+    Fraction of `relevant_ids` (the gold chunk_ids for a query) that appear
+    anywhere in the top-k of `retrieved`. Every retriever/reranker in this
+    module already returns best-first, so this just checks membership in a
+    prefix -- k defaults to the full list (checking recall at whatever depth
+    was actually retrieved) but can be set lower to check recall at a
+    shallower cutoff.
+    """
+    if not relevant_ids:
+        raise ValueError("relevant_ids must not be empty")
+
+    top = retrieved[:k] if k is not None else retrieved
+    hit_ids = {item.chunk_id for item in top}
+    return len(hit_ids & relevant_ids) / len(relevant_ids)
+
+
+def mean_reciprocal_rank(
+    rankings: List[List[RetrievedChunk]], relevant_ids_per_query: List[set[int]]
+) -> float:
+    """
+    Mean, across queries, of 1 / (rank of the first relevant chunk_id in
+    that query's ranking) -- 0.0 for a query whose ranking contains none of
+    its relevant chunk_ids. Rewards surfacing a relevant chunk early, not
+    just somewhere in the list, which recall_at_k doesn't distinguish.
+    """
+    if len(rankings) != len(relevant_ids_per_query):
+        raise ValueError("rankings and relevant_ids_per_query must be the same length")
+    if not rankings:
+        raise ValueError("rankings must not be empty")
+
+    reciprocal_ranks = []
+    for ranking, relevant_ids in zip(rankings, relevant_ids_per_query):
+        rr = 0.0
+        for rank, item in enumerate(ranking, start=1):
+            if item.chunk_id in relevant_ids:
+                rr = 1.0 / rank
+                break
+        reciprocal_ranks.append(rr)
+
+    return sum(reciprocal_ranks) / len(reciprocal_ranks)
+
+
+# -----------------------------
 # 4) RETRIEVAL + 5) AUGMENTATION
 # -----------------------------
 

@@ -20,6 +20,8 @@ from rag_from_scratch import (
     chunk_documents,
     chunk_text,
     l2_normalize,
+    mean_reciprocal_rank,
+    recall_at_k,
     reciprocal_rank_fusion,
     resolve_doc_paths,
     retrieve_and_answer,
@@ -536,3 +538,60 @@ def test_chunk_documents_tags_each_chunk_with_its_own_source(tmp_path):
     ]
     # index restarts per source document, not a global running counter
     assert [c.index for c in chunks] == [0, 0]
+
+
+# -----------------------------
+# recall_at_k / mean_reciprocal_rank (retrieval evaluation metrics)
+# -----------------------------
+
+def _chunks(*ids):
+    return [RetrievedChunk(chunk_id=i, score=1.0, text=str(i)) for i in ids]
+
+
+def test_recall_at_k_full_hit():
+    assert recall_at_k(_chunks(3, 1, 2), relevant_ids={1, 2}) == 1.0
+
+
+def test_recall_at_k_partial_hit():
+    assert recall_at_k(_chunks(3, 1, 5), relevant_ids={1, 2}) == 0.5
+
+
+def test_recall_at_k_no_hit():
+    assert recall_at_k(_chunks(3, 4, 5), relevant_ids={1, 2}) == 0.0
+
+
+def test_recall_at_k_respects_k_cutoff():
+    # The relevant chunk is retrieved, but only at rank 3 -- recall@2 should
+    # miss it even though it's present further down the full list.
+    retrieved = _chunks(9, 8, 1)
+    assert recall_at_k(retrieved, relevant_ids={1}, k=2) == 0.0
+    assert recall_at_k(retrieved, relevant_ids={1}, k=3) == 1.0
+
+
+def test_recall_at_k_empty_relevant_ids_raises():
+    with pytest.raises(ValueError):
+        recall_at_k(_chunks(1, 2), relevant_ids=set())
+
+
+def test_mean_reciprocal_rank_averages_across_queries():
+    rankings = [
+        _chunks(5, 1, 2),  # first relevant id (1) is at rank 2 -> 1/2
+        _chunks(3, 4),  # no relevant id present -> 0.0
+    ]
+    relevant_ids_per_query = [{1}, {9}]
+    assert mean_reciprocal_rank(rankings, relevant_ids_per_query) == pytest.approx((0.5 + 0.0) / 2)
+
+
+def test_mean_reciprocal_rank_first_rank_hit_scores_one():
+    rankings = [_chunks(7, 8, 9)]
+    assert mean_reciprocal_rank(rankings, [{7}]) == 1.0
+
+
+def test_mean_reciprocal_rank_mismatched_lengths_raises():
+    with pytest.raises(ValueError):
+        mean_reciprocal_rank([_chunks(1)], [{1}, {2}])
+
+
+def test_mean_reciprocal_rank_empty_rankings_raises():
+    with pytest.raises(ValueError):
+        mean_reciprocal_rank([], [])
