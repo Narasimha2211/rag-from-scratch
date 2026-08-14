@@ -39,6 +39,10 @@ File: [rag_from_scratch.py](rag_from_scratch.py)
   - `none` (default)
   - `lexical` — dependency-free, rescoring the shortlist with BM25
   - `cross-encoder` — optional, `sentence-transformers` CrossEncoder
+- Multi-document ingestion — `--doc` accepts either a single `.txt` file or a
+  directory of them (all ingested together, e.g. `--doc data`)
+- Source citations — every retrieved chunk is tagged with where it came from
+  (`file.txt#3`), shown in the CLI output and grounded prompt
 - Prompt building that enforces:
   - “use only provided context”
   - abstain when evidence is missing
@@ -55,6 +59,7 @@ Interactive UI to experiment with:
 - retrieval mode (dense vs. hybrid)
 - reranker (none / lexical / cross-encoder)
 - optional LLM generation
+- multiple uploaded `.txt` documents at once, each cited by name
 
 ---
 
@@ -90,6 +95,42 @@ python rag_from_scratch.py --query "Why do we use overlap in chunking?" --retrie
 implemented from scratch in [rag_from_scratch.py](rag_from_scratch.py) —
 no extra dependency required. `CrossEncoderReranker` is optional
 (`sentence-transformers`).
+
+---
+
+## Measuring retrieval quality on this project's own data
+
+The external benchmarks above are the reason hybrid + reranking is here at
+all, but they're not *this* pipeline, on *this* chunking, on *these*
+documents. [eval_retrieval.py](eval_retrieval.py) closes that gap: it builds
+one index over `data/` (`HashingEmbedder`, dependency-free) and runs the 10
+hand-labeled queries in [data/eval_queries.json](data/eval_queries.json)
+through `recall_at_k`/`mean_reciprocal_rank` for each retrieval
+configuration.
+
+```bash
+python eval_retrieval.py
+# or: make eval
+```
+
+Measured on the two sample documents (`data/knowledge_base.txt`,
+`data/bm25_and_hybrid_search.txt`, 14 chunks total):
+
+| config          | recall@5 | MRR   |
+|-----------------|----------|-------|
+| dense           | 0.950    | 0.767 |
+| hybrid          | 0.950    | 0.900 |
+| hybrid+lexical  | 0.950    | 1.000 |
+
+Recall@5 barely moves here because the corpus is tiny (5 of 14 chunks is a
+lot of headroom), so it isn't a useful signal at this scale — but MRR shows
+the effect clearly: hybrid retrieval and reranking don't just find the right
+chunk, they rank it higher, and higher-ranked evidence matters more once
+`--top-k` is small in a real deployment. This is a 10-query smoke test
+against two short documents, not a rigorous benchmark — treat the numbers as
+a sanity check that the pipeline's own retrieval choices behave the way the
+research they're based on predicts, not as a substitute for evaluating on
+your own documents and queries.
 
 ---
 
@@ -147,6 +188,7 @@ Or use the `Makefile` shortcuts once dev dependencies are installed:
 make check      # lint + typecheck + test (what CI runs)
 make coverage   # test with coverage report
 make run        # run the CLI with a sample query
+make eval       # measure retrieval quality (recall@k, MRR) on data/eval_queries.json
 make streamlit  # launch the Streamlit app
 ```
 

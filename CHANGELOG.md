@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+- Added `eval_retrieval.py`, a runnable evaluation harness measuring `recall_at_k` and
+  `mean_reciprocal_rank` (both new, with tests) over 10 hand-labeled queries in
+  `data/eval_queries.json`, comparing dense / hybrid / hybrid+lexical-rerank side by side
+  (`make eval`). Measured on the two sample documents: MRR goes 0.767 (dense) -> 0.900
+  (hybrid) -> 1.000 (hybrid+rerank), backing the hybrid/reranking claims elsewhere in this
+  changelog with a number computed on this project's own pipeline instead of only external
+  benchmarks. See the README's "Measuring retrieval quality" section for the important caveat
+  that this is a 10-query smoke test on two short documents, not a rigorous benchmark.
+- Added multi-document ingestion: `--doc` now accepts a directory of `.txt` files (in addition
+  to a single file), each ingested and chunked separately so citations stay tied to the right
+  source (`resolve_doc_paths`, `chunk_documents`). Streamlit's uploader now accepts multiple
+  files for the same effect. Added `data/bm25_and_hybrid_search.txt` as a second sample
+  document so there's a real second file to ingest.
+- Added source citations: chunks are now tagged with where they came from
+  (`chunk_document`/`SourcedChunk`, e.g. `knowledge_base.txt#2`) and both the CLI output and
+  the grounded prompt show it via `build_grounded_prompt`'s new `sources` parameter. Not
+  available when using `--load-index`, since a saved index doesn't persist source metadata.
+- Extracted `retrieve_and_answer()`/`build_vector_store()` in `rag_from_scratch.py` so the CLI
+  and Streamlit app share one implementation of retrieval->reranking->generation instead of
+  two copies that could silently drift apart as retrieval options were added.
 - Added mypy static type checking with a dedicated CI job; fixed the issues it caught
   (implicit `None` typing on `FaissVectorStore.index`, a `store` variable inferred from only
   one branch of an if/else) and dropped now-redundant inline `# type: ignore` comments in
