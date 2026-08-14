@@ -28,7 +28,7 @@ jobs:
       - name: Install mypy and numpy
         run: pip install mypy numpy
       - name: Run mypy
-        run: mypy rag_from_scratch.py streamlit_app.py
+        run: mypy rag_from_scratch.py streamlit_app.py eval_retrieval.py
 
   pytest:
     runs-on: ubuntu-latest

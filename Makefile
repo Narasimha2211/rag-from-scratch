@@ -1,4 +1,4 @@
-.PHONY: install install-dev lint typecheck test coverage check run streamlit clean
+.PHONY: install install-dev lint typecheck test coverage check run eval streamlit clean
 
 install:
 	pip install -r requirements.txt
@@ -10,7 +10,7 @@ lint:
 	ruff check .
 
 typecheck:
-	mypy rag_from_scratch.py streamlit_app.py
+	mypy rag_from_scratch.py streamlit_app.py eval_retrieval.py
 
 test:
 	pytest -v
@@ -22,6 +22,9 @@ check: lint typecheck test
 
 run:
 	python rag_from_scratch.py --query "Why do we use overlap in chunking?"
+
+eval:
+	python eval_retrieval.py
 
 streamlit:
 	python -m streamlit run streamlit_app.py

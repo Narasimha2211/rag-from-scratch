@@ -1,0 +1,42 @@
+[
+  {
+    "query": "What does BM25's k1 parameter control?",
+    "relevant": ["bm25_and_hybrid_search.txt#2"]
+  },
+  {
+    "query": "Why does inverse document frequency give rare terms more weight?",
+    "relevant": ["bm25_and_hybrid_search.txt#1"]
+  },
+  {
+    "query": "What is Reciprocal Rank Fusion and how does it combine two ranked lists?",
+    "relevant": ["bm25_and_hybrid_search.txt#4", "bm25_and_hybrid_search.txt#5"]
+  },
+  {
+    "query": "Why is reranking only applied to a shortlist instead of the whole corpus?",
+    "relevant": ["bm25_and_hybrid_search.txt#6"]
+  },
+  {
+    "query": "Why does dense embedding search struggle with rare identifiers or product codes?",
+    "relevant": ["bm25_and_hybrid_search.txt#3"]
+  },
+  {
+    "query": "What are the five stages of a typical RAG pipeline?",
+    "relevant": ["knowledge_base.txt#0"]
+  },
+  {
+    "query": "Why do we use overlap in chunking?",
+    "relevant": ["knowledge_base.txt#1", "knowledge_base.txt#2"]
+  },
+  {
+    "query": "How is cosine similarity computed efficiently after L2-normalization?",
+    "relevant": ["knowledge_base.txt#2", "knowledge_base.txt#3"]
+  },
+  {
+    "query": "What does grounded prompting instruct the model to do when the answer is missing?",
+    "relevant": ["knowledge_base.txt#3"]
+  },
+  {
+    "query": "What two things should RAG evaluation check for?",
+    "relevant": ["knowledge_base.txt#4", "knowledge_base.txt#5"]
+  }
+]
