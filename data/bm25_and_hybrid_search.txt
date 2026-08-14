@@ -1,0 +1,13 @@
+BM25 is a lexical ranking function that scores a document by how often query terms appear in it, weighted by how rare each term is across the whole collection. Term frequency saturates rather than growing linearly, so a word appearing ten times doesn't score ten times higher than a word appearing once. This keeps very repetitive documents from dominating results just by repeating a common word.
+
+Inverse document frequency (IDF) gives rare terms more weight than common ones. A word like "the" appears in nearly every document and carries almost no signal, so its IDF is close to zero. A rare identifier or proper noun appears in only a few documents, so it carries a high IDF and dominates the score when it matches.
+
+BM25 also normalizes for document length. Without length normalization, long documents would score higher purely because they contain more words and more chances to match query terms, not because they are more relevant. The b parameter controls how strongly length normalization is applied, and k1 controls how quickly term frequency saturates.
+
+Dense embedding search and BM25 fail on different kinds of queries. Dense vectors capture semantic meaning, so they can match a query to a chunk that expresses the same idea with completely different words. But rare identifiers, product codes, and exact names get diluted into a fixed-size vector alongside everything else in the chunk, so dense search often misses them. BM25 has the opposite weakness: it cannot match a paraphrase that shares no vocabulary with the query.
+
+Hybrid retrieval runs both a dense search and a BM25 search over the same chunks and merges the two ranked lists. Reciprocal Rank Fusion (RRF) is a simple way to merge them: each result earns a score of one divided by a constant plus its rank in a given list, and scores from multiple lists are summed. A chunk that ranks well in either list, even if it is missing entirely from the other, can still surface near the top of the fused ranking.
+
+Reranking is a second pass applied after retrieval. A reranker, such as a cross-encoder, scores the query and a candidate chunk together in one forward pass instead of comparing two independently computed vectors. This joint scoring is usually far more accurate than similarity search alone, but it is too slow to run over an entire corpus, so it is only applied to a small shortlist that a retriever has already narrowed down.
+
+Combining hybrid retrieval with reranking is one of the highest-value upgrades over naive single-method retrieval. Hybrid retrieval widens the net so relevant chunks are less likely to be missed entirely, and reranking narrows that wider net back down with a much more accurate but more expensive scoring pass.

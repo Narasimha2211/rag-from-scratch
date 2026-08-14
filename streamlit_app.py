@@ -30,42 +30,46 @@ with st.sidebar:
     )
     use_llm = st.checkbox("Generate with OpenAI LLM", value=False)
 
-st.subheader("1) Document")
-upload = st.file_uploader("Upload .txt document", type=["txt"])
+st.subheader("1) Document(s)")
+uploads = st.file_uploader("Upload .txt document(s)", type=["txt"], accept_multiple_files=True)
 default_doc_path = Path("data/knowledge_base.txt")
 
-if upload is not None:
-    text = upload.read().decode("utf-8", errors="ignore")
-    source_name = upload.name
+if uploads:
+    docs = [(u.name, u.read().decode("utf-8", errors="ignore")) for u in uploads]
+elif default_doc_path.exists():
+    docs = [(default_doc_path.name, default_doc_path.read_text(encoding="utf-8"))]
 else:
-    if default_doc_path.exists():
-        text = default_doc_path.read_text(encoding="utf-8")
-        source_name = str(default_doc_path)
-    else:
-        text = ""
-        source_name = "No document found"
+    docs = []
 
-st.write(f"Using source: **{source_name}**")
+source_names = ", ".join(name for name, _ in docs) if docs else "No document found"
+st.write(f"Using source(s): **{source_names}**")
 
 query = st.text_input("2) Ask a question", value="Why do we use overlap in chunking?")
 
 if st.button("Run RAG", type="primary"):
-    if not text.strip():
-        st.error("No document text available. Upload a .txt file or create data/knowledge_base.txt.")
+    if not docs:
+        st.error("No document text available. Upload .txt file(s) or create data/knowledge_base.txt.")
         st.stop()
 
     try:
-        chunks = chunk_text(
-            text,
-            chunk_size=chunk_size,
-            overlap=overlap,
-            respect_word_boundaries=respect_word_boundaries,
-        )
-        # Uploaded files only exist in-memory (no path to re-read via
-        # chunk_document), so build the same "name#index" citation labels
-        # by hand instead.
-        source_basename = Path(source_name).name
-        sources = {i: f"{source_basename}#{i}" for i in range(len(chunks))}
+        # Chunk each document separately so citations ("name#index") stay
+        # tied to the right source file instead of blending across files.
+        chunks: list[str] = []
+        sources: dict[int, str] = {}
+        for name, text in docs:
+            pieces = chunk_text(
+                text,
+                chunk_size=chunk_size,
+                overlap=overlap,
+                respect_word_boundaries=respect_word_boundaries,
+            )
+            for i, piece in enumerate(pieces):
+                sources[len(chunks)] = f"{name}#{i}"
+                chunks.append(piece)
+
+        if not chunks:
+            st.error("Document(s) produced no chunks (empty text?).")
+            st.stop()
 
         embedder = choose_embedder(embedder_name)
         chunk_vectors = embedder.encode(chunks)

@@ -17,9 +17,11 @@ from rag_from_scratch import (
     build_vector_store,
     choose_reranker,
     chunk_document,
+    chunk_documents,
     chunk_text,
     l2_normalize,
     reciprocal_rank_fusion,
+    resolve_doc_paths,
     retrieve_and_answer,
     simple_grounded_answer,
 )
@@ -486,3 +488,51 @@ def test_build_grounded_prompt_omits_citation_for_unknown_chunk_id():
     retrieved = [RetrievedChunk(chunk_id=5, score=0.5, text="Overlap reduces missed context.")]
     prompt = build_grounded_prompt("Why use overlap?", retrieved, sources={0: "knowledge_base.txt#2"})
     assert "source=" not in prompt
+
+
+# -----------------------------
+# resolve_doc_paths / chunk_documents (multi-document ingestion)
+# -----------------------------
+
+def test_resolve_doc_paths_single_file_returns_that_file(tmp_path):
+    doc = tmp_path / "a.txt"
+    doc.write_text("hello", encoding="utf-8")
+    assert resolve_doc_paths(doc) == [doc]
+
+
+def test_resolve_doc_paths_missing_file_raises(tmp_path):
+    with pytest.raises(FileNotFoundError):
+        resolve_doc_paths(tmp_path / "does_not_exist.txt")
+
+
+def test_resolve_doc_paths_directory_returns_sorted_txt_files(tmp_path):
+    (tmp_path / "b.txt").write_text("b", encoding="utf-8")
+    (tmp_path / "a.txt").write_text("a", encoding="utf-8")
+    (tmp_path / "not_a_doc.md").write_text("ignore me", encoding="utf-8")
+
+    paths = resolve_doc_paths(tmp_path)
+
+    assert [p.name for p in paths] == ["a.txt", "b.txt"]
+
+
+def test_resolve_doc_paths_empty_directory_raises(tmp_path):
+    empty_dir = tmp_path / "empty"
+    empty_dir.mkdir()
+    with pytest.raises(FileNotFoundError):
+        resolve_doc_paths(empty_dir)
+
+
+def test_chunk_documents_tags_each_chunk_with_its_own_source(tmp_path):
+    doc_a = tmp_path / "a.txt"
+    doc_a.write_text("alpha beta", encoding="utf-8")
+    doc_b = tmp_path / "b.txt"
+    doc_b.write_text("gamma delta", encoding="utf-8")
+
+    chunks = chunk_documents([doc_a, doc_b], chunk_size=100, overlap=0)
+
+    assert [(c.source, c.text) for c in chunks] == [
+        ("a.txt", "alpha beta"),
+        ("b.txt", "gamma delta"),
+    ]
+    # index restarts per source document, not a global running counter
+    assert [c.index for c in chunks] == [0, 0]

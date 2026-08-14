@@ -133,6 +133,41 @@ def chunk_document(
     return [SourcedChunk(text=piece, source=path.name, index=i) for i, piece in enumerate(pieces)]
 
 
+def resolve_doc_paths(doc: str | Path) -> List[Path]:
+    """
+    `doc` may point at a single .txt file or a directory containing .txt
+    files. A directory is expanded (non-recursively, sorted for a stable
+    ingestion order) into all its .txt files, each ingested as a separate
+    source so citations still point at the right file.
+    """
+    path = Path(doc)
+    if path.is_dir():
+        paths = sorted(path.glob("*.txt"))
+        if not paths:
+            raise FileNotFoundError(f"No .txt files found in directory: {path}")
+        return paths
+    if not path.exists():
+        raise FileNotFoundError(f"Document not found: {path}")
+    return [path]
+
+
+def chunk_documents(
+    paths: List[Path],
+    chunk_size: int = 500,
+    overlap: int = 100,
+    respect_word_boundaries: bool = False,
+) -> List[SourcedChunk]:
+    """Chunks every file in `paths` (see resolve_doc_paths), concatenating results in path order."""
+    all_chunks: List[SourcedChunk] = []
+    for path in paths:
+        all_chunks.extend(
+            chunk_document(
+                path, chunk_size=chunk_size, overlap=overlap, respect_word_boundaries=respect_word_boundaries
+            )
+        )
+    return all_chunks
+
+
 # -----------------------------
 # 2) EMBEDDING GENERATION
 # -----------------------------
@@ -750,7 +785,12 @@ def retrieve_and_answer(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="My from-scratch RAG learning pipeline.")
-    parser.add_argument("--doc", type=str, default="data/knowledge_base.txt", help="Path to source text file")
+    parser.add_argument(
+        "--doc",
+        type=str,
+        default="data/knowledge_base.txt",
+        help="Path to a source .txt file, or a directory of .txt files to ingest together",
+    )
     parser.add_argument("--query", type=str, default="Why do we use overlap in chunking?", help="User query")
     parser.add_argument("--chunk-size", type=int, default=450)
     parser.add_argument("--overlap", type=int, default=90)
@@ -807,14 +847,12 @@ def main() -> None:
         # A saved index doesn't persist per-chunk source metadata, so citations
         # aren't available for a loaded index -- sources stays None.
     else:
-        doc_path = Path(args.doc)
-        if not doc_path.exists():
-            raise FileNotFoundError(f"Document not found: {doc_path}")
-        source_label = str(doc_path)
+        doc_paths = resolve_doc_paths(args.doc)
+        source_label = args.doc if len(doc_paths) > 1 else str(doc_paths[0])
 
         # 1) Chunking (tagged with source filename + position for citations)
-        sourced_chunks = chunk_document(
-            doc_path,
+        sourced_chunks = chunk_documents(
+            doc_paths,
             chunk_size=args.chunk_size,
             overlap=args.overlap,
             respect_word_boundaries=args.respect_word_boundaries,
