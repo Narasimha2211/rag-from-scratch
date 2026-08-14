@@ -14,10 +14,12 @@ from rag_from_scratch import (
     NumpyVectorStore,
     RetrievedChunk,
     build_grounded_prompt,
+    build_vector_store,
     choose_reranker,
     chunk_text,
     l2_normalize,
     reciprocal_rank_fusion,
+    retrieve_and_answer,
     simple_grounded_answer,
 )
 
@@ -369,3 +371,64 @@ def test_choose_reranker_lexical_returns_lexical_reranker():
 def test_choose_reranker_unknown_raises():
     with pytest.raises(ValueError):
         choose_reranker("not-a-real-reranker")
+
+
+# -----------------------------
+# build_vector_store / retrieve_and_answer
+# (shared pipeline helpers used by both the CLI and the Streamlit app)
+# -----------------------------
+
+def _build_store(chunks):
+    embedder = HashingEmbedder(dim=64)
+    vectors = embedder.encode(chunks)
+    return embedder, build_vector_store("numpy", vectors, chunks)
+
+
+def test_build_vector_store_numpy_returns_populated_store():
+    chunks = ["cats are great pets", "dogs are great pets"]
+    _, store = _build_store(chunks)
+    assert isinstance(store, NumpyVectorStore)
+    assert store.chunks == chunks
+
+
+def test_build_vector_store_unknown_name_falls_back_to_numpy():
+    # Matches the CLI's `--vector-store` choice validation happening in
+    # argparse, not here -- any non-"faiss" name is treated as numpy.
+    _, store = _build_store(["a chunk"])
+    assert isinstance(store, NumpyVectorStore)
+
+
+def test_retrieve_and_answer_dense_returns_top_k():
+    chunks = ["cats are great pets", "dogs are great pets", "the secret keyword is glorbnax"]
+    embedder, store = _build_store(chunks)
+
+    result = retrieve_and_answer("glorbnax", embedder, store, chunks, top_k=2, retrieval="dense")
+
+    assert len(result.retrieved) == 2
+    assert "glorbnax" in result.prompt
+    assert result.answer  # fallback generator always returns something
+
+
+def test_retrieve_and_answer_hybrid_surfaces_exact_keyword_match():
+    chunks = [
+        "completely unrelated text about the weather today",
+        "another unrelated paragraph about gardening",
+        "yet another paragraph about cooking recipes",
+        "the secret keyword is glorbnax and nothing else",
+    ]
+    embedder, store = _build_store(chunks)
+
+    result = retrieve_and_answer("glorbnax", embedder, store, chunks, top_k=1, retrieval="hybrid")
+
+    assert result.retrieved[0].text == chunks[3]
+
+
+def test_retrieve_and_answer_applies_reranker():
+    chunks = ["completely unrelated text about gardening", "the secret keyword is glorbnax"]
+    embedder, store = _build_store(chunks)
+
+    result = retrieve_and_answer(
+        "what is glorbnax", embedder, store, chunks, top_k=1, retrieval="dense", rerank="lexical"
+    )
+
+    assert result.retrieved[0].text == chunks[1]

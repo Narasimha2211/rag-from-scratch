@@ -650,6 +650,59 @@ def choose_embedder(name: str) -> BaseEmbedder:
     raise ValueError(f"Unknown embedder: {name}")
 
 
+def build_vector_store(
+    vector_store_name: str, chunk_vectors: np.ndarray, chunks: List[str]
+) -> "NumpyVectorStore | FaissVectorStore":
+    store: NumpyVectorStore | FaissVectorStore
+    store = FaissVectorStore() if vector_store_name == "faiss" else NumpyVectorStore()
+    store.add(chunk_vectors, chunks)
+    return store
+
+
+@dataclass
+class PipelineResult:
+    retrieved: List[RetrievedChunk]
+    prompt: str
+    answer: str
+
+
+def retrieve_and_answer(
+    query: str,
+    embedder: BaseEmbedder,
+    store: "NumpyVectorStore | FaissVectorStore",
+    chunks: List[str],
+    top_k: int = 3,
+    retrieval: str = "dense",
+    rerank: str | None = "none",
+    generate_with_llm: bool = False,
+) -> PipelineResult:
+    """
+    Runs retrieval through generation (pipeline steps 4-5) against an
+    already-built store. Shared by the CLI and the Streamlit app so the two
+    don't drift out of sync on how reranking/hybrid/generation are wired
+    together.
+    """
+    query_vector = embedder.encode([query])[0]
+    reranker = choose_reranker(rerank)
+    # When reranking, fetch a broader shortlist first so the reranker has
+    # something worth rescoring instead of just re-sorting the final top-k.
+    retrieval_k = max(10, top_k * 3) if reranker else top_k
+
+    if retrieval == "hybrid":
+        retriever = HybridRetriever(store, BM25(chunks))
+        retrieved = retriever.search(query, query_vector, top_k=retrieval_k, fetch_k=max(10, retrieval_k * 3))
+    else:
+        retrieved = store.search(query_vector, top_k=retrieval_k)
+
+    if reranker:
+        retrieved = reranker.rerank(query, retrieved, top_k=top_k)
+
+    prompt = build_grounded_prompt(query, retrieved)
+    answer = generate_with_openai(prompt) if generate_with_llm else simple_grounded_answer(query, retrieved)
+
+    return PipelineResult(retrieved=retrieved, prompt=prompt, answer=answer)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="My from-scratch RAG learning pipeline.")
     parser.add_argument("--doc", type=str, default="data/knowledge_base.txt", help="Path to source text file")
@@ -724,44 +777,25 @@ def main() -> None:
         chunk_vectors = embedder.encode(chunks)
 
         # 3) Store vectors
-        if args.vector_store == "faiss":
-            store = FaissVectorStore()
-        else:
-            store = NumpyVectorStore()
-
-        store.add(chunk_vectors, chunks)
+        store = build_vector_store(args.vector_store, chunk_vectors, chunks)
 
         if args.save_index:
             if not isinstance(store, NumpyVectorStore):
                 raise ValueError("--save-index only supports --vector-store numpy")
             store.save(args.save_index)
 
-    # 4) Retrieval
-    query_vector = embedder.encode([args.query])[0]
-    reranker = choose_reranker(args.rerank)
-    # When reranking, fetch a broader shortlist first so the reranker has
-    # something worth rescoring instead of just re-sorting the final top-k.
-    retrieval_k = max(10, args.top_k * 3) if reranker else args.top_k
-
-    if args.retrieval == "hybrid":
-        retriever = HybridRetriever(store, BM25(chunks))
-        retrieved = retriever.search(
-            args.query, query_vector, top_k=retrieval_k, fetch_k=max(10, retrieval_k * 3)
-        )
-    else:
-        retrieved = store.search(query_vector, top_k=retrieval_k)
-
-    if reranker:
-        retrieved = reranker.rerank(args.query, retrieved, top_k=args.top_k)
-
-    # 5) Augmentation (context injection)
-    prompt = build_grounded_prompt(args.query, retrieved)
-
-    # Generation (LLM optional; fallback answer always available)
-    if args.generate_with_llm:
-        answer = generate_with_openai(prompt)
-    else:
-        answer = simple_grounded_answer(args.query, retrieved)
+    # 4) Retrieval + 5) Augmentation + generation
+    result = retrieve_and_answer(
+        args.query,
+        embedder,
+        store,
+        chunks,
+        top_k=args.top_k,
+        retrieval=args.retrieval,
+        rerank=args.rerank,
+        generate_with_llm=args.generate_with_llm,
+    )
+    retrieved, prompt, answer = result.retrieved, result.prompt, result.answer
 
     print("\n=== MY RAG LEARNING PIPELINE ===")
     print(f"Source: {source_label}")

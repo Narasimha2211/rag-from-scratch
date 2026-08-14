@@ -2,18 +2,7 @@ from pathlib import Path
 
 import streamlit as st
 
-from rag_from_scratch import (
-    BM25,
-    FaissVectorStore,
-    HybridRetriever,
-    NumpyVectorStore,
-    build_grounded_prompt,
-    choose_embedder,
-    choose_reranker,
-    chunk_text,
-    generate_with_openai,
-    simple_grounded_answer,
-)
+from rag_from_scratch import build_vector_store, choose_embedder, chunk_text, retrieve_and_answer
 
 st.set_page_config(page_title="My RAG Learning Lab", page_icon="📚", layout="wide")
 st.title("📚 My RAG Learning Lab")
@@ -74,38 +63,19 @@ if st.button("Run RAG", type="primary"):
         )
         embedder = choose_embedder(embedder_name)
         chunk_vectors = embedder.encode(chunks)
+        store = build_vector_store(vector_store_name, chunk_vectors, chunks)
 
-        store: FaissVectorStore | NumpyVectorStore
-        if vector_store_name == "faiss":
-            store = FaissVectorStore()
-        else:
-            store = NumpyVectorStore()
-
-        store.add(chunk_vectors, chunks)
-        query_vector = embedder.encode([query])[0]
-
-        reranker = choose_reranker(rerank_name)
-        # When reranking, fetch a broader shortlist first so the reranker has
-        # something worth rescoring instead of just re-sorting the final top-k.
-        retrieval_k = max(10, top_k * 3) if reranker else top_k
-
-        if retrieval_mode == "hybrid":
-            retriever = HybridRetriever(store, BM25(chunks))
-            retrieved = retriever.search(
-                query, query_vector, top_k=retrieval_k, fetch_k=max(10, retrieval_k * 3)
-            )
-        else:
-            retrieved = store.search(query_vector, top_k=retrieval_k)
-
-        if reranker:
-            retrieved = reranker.rerank(query, retrieved, top_k=top_k)
-
-        prompt = build_grounded_prompt(query, retrieved)
-
-        if use_llm:
-            answer = generate_with_openai(prompt)
-        else:
-            answer = simple_grounded_answer(query, retrieved)
+        result = retrieve_and_answer(
+            query,
+            embedder,
+            store,
+            chunks,
+            top_k=top_k,
+            retrieval=retrieval_mode,
+            rerank=rerank_name,
+            generate_with_llm=use_llm,
+        )
+        retrieved, prompt, answer = result.retrieved, result.prompt, result.answer
 
     except Exception as exc:
         st.error(f"Pipeline failed: {exc}")
