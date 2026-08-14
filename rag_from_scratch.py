@@ -102,6 +102,37 @@ def chunk_text(
     return chunks
 
 
+@dataclass
+class SourcedChunk:
+    """A chunk tagged with where it came from, for citations in the final answer."""
+
+    text: str
+    source: str
+    index: int  # position of this chunk within its source document (0-based)
+
+
+def chunk_document(
+    path: str | Path,
+    chunk_size: int = 500,
+    overlap: int = 100,
+    respect_word_boundaries: bool = False,
+) -> List[SourcedChunk]:
+    """
+    Reads and chunks a single file, tagging each chunk with its source
+    filename and position so retrieved results can be cited (e.g.
+    "knowledge_base.txt#3") instead of showing bare, unattributed text.
+
+    Uses the source filename + chunk index rather than character offsets:
+    chunk_text() strips and can trim chunk boundaries (respect_word_boundaries),
+    so the returned strings don't align 1:1 with raw offsets into the
+    original text.
+    """
+    path = Path(path)
+    text = path.read_text(encoding="utf-8")
+    pieces = chunk_text(text, chunk_size=chunk_size, overlap=overlap, respect_word_boundaries=respect_word_boundaries)
+    return [SourcedChunk(text=piece, source=path.name, index=i) for i, piece in enumerate(pieces)]
+
+
 # -----------------------------
 # 2) EMBEDDING GENERATION
 # -----------------------------
@@ -537,17 +568,26 @@ def choose_reranker(name: str | None) -> BaseReranker | None:
 # 4) RETRIEVAL + 5) AUGMENTATION
 # -----------------------------
 
-def build_grounded_prompt(query: str, retrieved: List[RetrievedChunk]) -> str:
+def build_grounded_prompt(
+    query: str, retrieved: List[RetrievedChunk], sources: dict[int, str] | None = None
+) -> str:
     """
     Context injection prompt:
     - Explicitly tells model to only use retrieved context
     - Forces abstention when evidence is missing
 
     This is a key anti-hallucination control.
+
+    `sources`, if given, maps chunk_id -> a citation label (e.g.
+    "knowledge_base.txt#3") so each context block names where it came from.
+    Optional and keyed by chunk_id (not positional) since --load-index and
+    tests that build RetrievedChunk directly don't always have source
+    metadata available.
     """
     context_blocks = []
     for i, item in enumerate(retrieved, start=1):
-        context_blocks.append(f"[Chunk {i} | score={item.score:.4f}]\n{item.text}")
+        citation = f" | source={sources[item.chunk_id]}" if sources and item.chunk_id in sources else ""
+        context_blocks.append(f"[Chunk {i} | score={item.score:.4f}{citation}]\n{item.text}")
 
     context = "\n\n".join(context_blocks) if context_blocks else "(No context retrieved)"
 
@@ -675,12 +715,17 @@ def retrieve_and_answer(
     retrieval: str = "dense",
     rerank: str | None = "none",
     generate_with_llm: bool = False,
+    sources: dict[int, str] | None = None,
 ) -> PipelineResult:
     """
     Runs retrieval through generation (pipeline steps 4-5) against an
     already-built store. Shared by the CLI and the Streamlit app so the two
     don't drift out of sync on how reranking/hybrid/generation are wired
     together.
+
+    `sources`, if given, maps chunk_id -> citation label and is threaded
+    through to build_grounded_prompt() (see there for why it's a dict
+    keyed by chunk_id rather than a positional list).
     """
     query_vector = embedder.encode([query])[0]
     reranker = choose_reranker(rerank)
@@ -697,7 +742,7 @@ def retrieve_and_answer(
     if reranker:
         retrieved = reranker.rerank(query, retrieved, top_k=top_k)
 
-    prompt = build_grounded_prompt(query, retrieved)
+    prompt = build_grounded_prompt(query, retrieved, sources=sources)
     answer = generate_with_openai(prompt) if generate_with_llm else simple_grounded_answer(query, retrieved)
 
     return PipelineResult(retrieved=retrieved, prompt=prompt, answer=answer)
@@ -751,6 +796,7 @@ def main() -> None:
 
     embedder = choose_embedder(args.embedder)
     store: FaissVectorStore | NumpyVectorStore
+    sources: dict[int, str] | None = None
 
     if args.load_index:
         if args.vector_store == "faiss":
@@ -758,20 +804,23 @@ def main() -> None:
         store = NumpyVectorStore.load(args.load_index)
         chunks = store.chunks
         source_label = f"loaded index: {args.load_index}"
+        # A saved index doesn't persist per-chunk source metadata, so citations
+        # aren't available for a loaded index -- sources stays None.
     else:
         doc_path = Path(args.doc)
         if not doc_path.exists():
             raise FileNotFoundError(f"Document not found: {doc_path}")
-        text = doc_path.read_text(encoding="utf-8")
         source_label = str(doc_path)
 
-        # 1) Chunking
-        chunks = chunk_text(
-            text,
+        # 1) Chunking (tagged with source filename + position for citations)
+        sourced_chunks = chunk_document(
+            doc_path,
             chunk_size=args.chunk_size,
             overlap=args.overlap,
             respect_word_boundaries=args.respect_word_boundaries,
         )
+        chunks = [c.text for c in sourced_chunks]
+        sources = {i: f"{c.source}#{c.index}" for i, c in enumerate(sourced_chunks)}
 
         # 2) Embeddings
         chunk_vectors = embedder.encode(chunks)
@@ -794,6 +843,7 @@ def main() -> None:
         retrieval=args.retrieval,
         rerank=args.rerank,
         generate_with_llm=args.generate_with_llm,
+        sources=sources,
     )
     retrieved, prompt, answer = result.retrieved, result.prompt, result.answer
 
@@ -808,7 +858,8 @@ def main() -> None:
     print("\n--- Top Retrieved Chunks ---")
     for item in retrieved:
         preview = item.text.replace("\n", " ")[:180]
-        print(f"- id={item.chunk_id:02d}  score={item.score:.4f}  text={preview}...")
+        citation = f"  source={sources[item.chunk_id]}" if sources and item.chunk_id in sources else ""
+        print(f"- id={item.chunk_id:02d}  score={item.score:.4f}{citation}  text={preview}...")
 
     print("\n--- Grounded Prompt (Context Injection) ---")
     print(prompt)

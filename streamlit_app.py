@@ -61,6 +61,12 @@ if st.button("Run RAG", type="primary"):
             overlap=overlap,
             respect_word_boundaries=respect_word_boundaries,
         )
+        # Uploaded files only exist in-memory (no path to re-read via
+        # chunk_document), so build the same "name#index" citation labels
+        # by hand instead.
+        source_basename = Path(source_name).name
+        sources = {i: f"{source_basename}#{i}" for i in range(len(chunks))}
+
         embedder = choose_embedder(embedder_name)
         chunk_vectors = embedder.encode(chunks)
         store = build_vector_store(vector_store_name, chunk_vectors, chunks)
@@ -74,6 +80,7 @@ if st.button("Run RAG", type="primary"):
             retrieval=retrieval_mode,
             rerank=rerank_name,
             generate_with_llm=use_llm,
+            sources=sources,
         )
         retrieved, prompt, answer = result.retrieved, result.prompt, result.answer
 
@@ -86,7 +93,8 @@ if st.button("Run RAG", type="primary"):
         st.subheader("3) Retrieval Results")
         st.write(f"Chunks created: **{len(chunks)}**")
         for i, item in enumerate(retrieved, start=1):
-            st.markdown(f"**Chunk {i}** | score={item.score:.4f} | id={item.chunk_id}")
+            citation = sources.get(item.chunk_id, "unknown")
+            st.markdown(f"**Chunk {i}** | score={item.score:.4f} | id={item.chunk_id} | source={citation}")
             st.write(item.text)
             st.divider()
 

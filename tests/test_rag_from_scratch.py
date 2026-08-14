@@ -16,6 +16,7 @@ from rag_from_scratch import (
     build_grounded_prompt,
     build_vector_store,
     choose_reranker,
+    chunk_document,
     chunk_text,
     l2_normalize,
     reciprocal_rank_fusion,
@@ -432,3 +433,56 @@ def test_retrieve_and_answer_applies_reranker():
     )
 
     assert result.retrieved[0].text == chunks[1]
+
+
+def test_retrieve_and_answer_threads_sources_into_prompt():
+    chunks = ["the secret keyword is glorbnax"]
+    embedder, store = _build_store(chunks)
+
+    result = retrieve_and_answer(
+        "glorbnax", embedder, store, chunks, top_k=1, sources={0: "doc.txt#0"}
+    )
+
+    assert "source=doc.txt#0" in result.prompt
+
+
+# -----------------------------
+# chunk_document (source citations)
+# -----------------------------
+
+def test_chunk_document_tags_chunks_with_source_and_index(tmp_path):
+    doc = tmp_path / "notes.txt"
+    doc.write_text("abcdefghij", encoding="utf-8")
+
+    chunks = chunk_document(doc, chunk_size=4, overlap=2)
+
+    assert [c.text for c in chunks] == ["abcd", "cdef", "efgh", "ghij", "ij"]
+    assert all(c.source == "notes.txt" for c in chunks)
+    assert [c.index for c in chunks] == [0, 1, 2, 3, 4]
+
+
+def test_chunk_document_uses_filename_not_full_path(tmp_path):
+    subdir = tmp_path / "some" / "nested" / "dir"
+    subdir.mkdir(parents=True)
+    doc = subdir / "report.txt"
+    doc.write_text("hello world", encoding="utf-8")
+
+    chunks = chunk_document(doc, chunk_size=100, overlap=0)
+
+    assert chunks[0].source == "report.txt"
+
+
+# -----------------------------
+# build_grounded_prompt citations
+# -----------------------------
+
+def test_build_grounded_prompt_includes_citation_when_sources_given():
+    retrieved = [RetrievedChunk(chunk_id=0, score=0.5, text="Overlap reduces missed context.")]
+    prompt = build_grounded_prompt("Why use overlap?", retrieved, sources={0: "knowledge_base.txt#2"})
+    assert "source=knowledge_base.txt#2" in prompt
+
+
+def test_build_grounded_prompt_omits_citation_for_unknown_chunk_id():
+    retrieved = [RetrievedChunk(chunk_id=5, score=0.5, text="Overlap reduces missed context.")]
+    prompt = build_grounded_prompt("Why use overlap?", retrieved, sources={0: "knowledge_base.txt#2"})
+    assert "source=" not in prompt
