@@ -102,6 +102,96 @@ def chunk_text(
     return chunks
 
 
+_PARAGRAPH_SEP = re.compile(r"\n\s*\n")
+_SENTENCE_SEP = re.compile(r"(?<=[.!?])\s+")
+
+
+def _split_semantic_units(text: str) -> List[str]:
+    """
+    Splits text into paragraphs (blank-line separated), then splits each
+    paragraph into sentences. A paragraph break is respected as a unit
+    boundary even when the paragraph has no sentence-ending punctuation, so
+    a run of unpunctuated text can't grow into one giant unit that would
+    later need a character-level fallback split.
+    """
+    units: List[str] = []
+    for paragraph in _PARAGRAPH_SEP.split(text):
+        paragraph = paragraph.strip()
+        if not paragraph:
+            continue
+        units.extend(s.strip() for s in _SENTENCE_SEP.split(paragraph) if s.strip())
+    return units
+
+
+def _pack_units(units: List[str], chunk_size: int, overlap: int) -> List[str]:
+    """
+    Greedily packs semantic units (sentences) into chunks up to chunk_size
+    characters, joined with a single space. When adding a unit would
+    overflow the current chunk, flushes it and carries however many
+    trailing units fit within `overlap` characters into the next chunk, so
+    context survives the boundary the same way chunk_text()'s overlap does
+    for fixed windows.
+
+    A single unit longer than chunk_size (an unusually long sentence) has no
+    smaller semantic boundary left to respect, so it's hard-split with
+    chunk_text() as a fallback.
+    """
+    chunks: List[str] = []
+    current: List[str] = []
+    current_len = 0
+
+    def flush() -> None:
+        if current:
+            chunks.append(" ".join(current))
+
+    for unit in units:
+        if len(unit) > chunk_size:
+            flush()
+            current, current_len = [], 0
+            chunks.extend(
+                chunk_text(unit, chunk_size=chunk_size, overlap=min(overlap, chunk_size - 1), respect_word_boundaries=True)
+            )
+            continue
+
+        added_len = len(unit) + (1 if current else 0)
+        if current and current_len + added_len > chunk_size:
+            flush()
+            carried: List[str] = []
+            carried_len = 0
+            for u in reversed(current):
+                if carried_len + len(u) > overlap:
+                    break
+                carried.insert(0, u)
+                carried_len += len(u) + 1
+            current, current_len = carried, sum(len(u) for u in carried) + max(0, len(carried) - 1)
+
+        current.append(unit)
+        current_len += len(unit) + (1 if len(current) > 1 else 0)
+
+    flush()
+    return chunks
+
+
+def chunk_text_recursive(text: str, chunk_size: int = 500, overlap: int = 100) -> List[str]:
+    """
+    Recursive/semantic chunking: splits text along a hierarchy of natural
+    boundaries (paragraphs, then sentences) instead of cutting at a fixed
+    character offset, then greedily packs the resulting units into
+    chunk_size windows with overlap (see _pack_units). Keeps whole sentences
+    intact where chunk_text()'s fixed windows might cut mid-sentence, at the
+    cost of chunk sizes that vary more -- packing stops at a sentence
+    boundary, not exactly chunk_size.
+    """
+    if chunk_size <= 0:
+        raise ValueError("chunk_size must be > 0")
+    if overlap < 0:
+        raise ValueError("overlap must be >= 0")
+    if overlap >= chunk_size:
+        raise ValueError("overlap must be smaller than chunk_size")
+
+    return _pack_units(_split_semantic_units(text), chunk_size, overlap)
+
+
 @dataclass
 class SourcedChunk:
     """A chunk tagged with where it came from, for citations in the final answer."""
@@ -116,6 +206,7 @@ def chunk_document(
     chunk_size: int = 500,
     overlap: int = 100,
     respect_word_boundaries: bool = False,
+    chunk_strategy: str = "fixed",
 ) -> List[SourcedChunk]:
     """
     Reads and chunks a single file, tagging each chunk with its source
@@ -126,10 +217,21 @@ def chunk_document(
     chunk_text() strips and can trim chunk boundaries (respect_word_boundaries),
     so the returned strings don't align 1:1 with raw offsets into the
     original text.
+
+    `chunk_strategy`: "fixed" (default) uses chunk_text()'s character
+    windows (respect_word_boundaries applies here); "recursive" uses
+    chunk_text_recursive()'s paragraph/sentence-aware packing instead
+    (respect_word_boundaries doesn't apply -- it already keeps whole
+    sentences together).
     """
     path = Path(path)
     text = path.read_text(encoding="utf-8")
-    pieces = chunk_text(text, chunk_size=chunk_size, overlap=overlap, respect_word_boundaries=respect_word_boundaries)
+    if chunk_strategy == "recursive":
+        pieces = chunk_text_recursive(text, chunk_size=chunk_size, overlap=overlap)
+    elif chunk_strategy == "fixed":
+        pieces = chunk_text(text, chunk_size=chunk_size, overlap=overlap, respect_word_boundaries=respect_word_boundaries)
+    else:
+        raise ValueError(f"Unknown chunk_strategy: {chunk_strategy}")
     return [SourcedChunk(text=piece, source=path.name, index=i) for i, piece in enumerate(pieces)]
 
 
@@ -156,13 +258,18 @@ def chunk_documents(
     chunk_size: int = 500,
     overlap: int = 100,
     respect_word_boundaries: bool = False,
+    chunk_strategy: str = "fixed",
 ) -> List[SourcedChunk]:
     """Chunks every file in `paths` (see resolve_doc_paths), concatenating results in path order."""
     all_chunks: List[SourcedChunk] = []
     for path in paths:
         all_chunks.extend(
             chunk_document(
-                path, chunk_size=chunk_size, overlap=overlap, respect_word_boundaries=respect_word_boundaries
+                path,
+                chunk_size=chunk_size,
+                overlap=overlap,
+                respect_word_boundaries=respect_word_boundaries,
+                chunk_strategy=chunk_strategy,
             )
         )
     return all_chunks
@@ -952,7 +1059,13 @@ def main() -> None:
     parser.add_argument(
         "--respect-word-boundaries",
         action="store_true",
-        help="Trim chunks back to the previous space instead of splitting a word in half",
+        help="Trim chunks back to the previous space instead of splitting a word in half (--chunk-strategy fixed only)",
+    )
+    parser.add_argument(
+        "--chunk-strategy",
+        choices=["fixed", "recursive"],
+        default="fixed",
+        help="'fixed' uses character windows; 'recursive' packs whole paragraphs/sentences up to --chunk-size instead",
     )
     parser.add_argument(
         "--retrieval",
@@ -1013,6 +1126,7 @@ def main() -> None:
             chunk_size=args.chunk_size,
             overlap=args.overlap,
             respect_word_boundaries=args.respect_word_boundaries,
+            chunk_strategy=args.chunk_strategy,
         )
         chunks = [c.text for c in sourced_chunks]
         sources = {i: f"{c.source}#{c.index}" for i, c in enumerate(sourced_chunks)}
@@ -1046,7 +1160,7 @@ def main() -> None:
 
     print("\n=== MY RAG LEARNING PIPELINE ===")
     print(f"Source: {source_label}")
-    print(f"Chunks created: {len(chunks)}")
+    print(f"Chunks created: {len(chunks)} (strategy={args.chunk_strategy})")
     print(f"Embedder: {args.embedder}")
     print(f"Vector store: {args.vector_store}")
     print(f"Retrieval: {args.retrieval}")

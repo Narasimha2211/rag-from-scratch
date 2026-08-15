@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Added a recursive/paragraph-aware chunking strategy (`--chunk-strategy {fixed,recursive}`,
+  default `fixed`): `chunk_text_recursive` splits along a hierarchy of natural boundaries
+  (paragraphs, then sentences) instead of a fixed character offset, then greedily packs the
+  resulting units up to `--chunk-size` with `--overlap` carried across the boundary the same
+  way the fixed strategy does for characters. Falls back to `chunk_text`'s character windows
+  for a single unit longer than `--chunk-size`. Wired through `chunk_document`/`chunk_documents`.
 - Added Maximal Marginal Relevance (`--mmr`, `--mmr-lambda`): `mmr_select` greedily
   re-selects the final top-k trading relevance off against redundancy (Carbonell &
   Goldstein, 1998), so results aren't dominated by several near-duplicate chunks.

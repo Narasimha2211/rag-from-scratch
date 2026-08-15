@@ -19,6 +19,7 @@ from rag_from_scratch import (
     chunk_document,
     chunk_documents,
     chunk_text,
+    chunk_text_recursive,
     l2_normalize,
     mean_reciprocal_rank,
     mmr_select,
@@ -84,6 +85,65 @@ def test_chunk_text_respect_word_boundaries_still_splits_a_word_longer_than_chun
     text = "supercalifragilistic expialidocious"
     chunks = chunk_text(text, chunk_size=12, overlap=0, respect_word_boundaries=True)
     assert chunks[0] == "supercalifra"
+
+
+# -----------------------------
+# chunk_text_recursive
+# -----------------------------
+
+def test_chunk_text_recursive_invalid_args_raise():
+    with pytest.raises(ValueError):
+        chunk_text_recursive("some text", chunk_size=0, overlap=0)
+    with pytest.raises(ValueError):
+        chunk_text_recursive("some text", chunk_size=10, overlap=10)
+
+
+def test_chunk_text_recursive_one_sentence_per_chunk_when_chunk_size_is_tight():
+    text = "Sentence one is short. Sentence two is short too. Sentence three is also short."
+    chunks = chunk_text_recursive(text, chunk_size=40, overlap=0)
+    assert chunks == [
+        "Sentence one is short.",
+        "Sentence two is short too.",
+        "Sentence three is also short.",
+    ]
+
+
+def test_chunk_text_recursive_packs_multiple_sentences_per_chunk():
+    text = "Sentence one is short. Sentence two is short too. Sentence three is also short."
+    chunks = chunk_text_recursive(text, chunk_size=60, overlap=0)
+    assert chunks == [
+        "Sentence one is short. Sentence two is short too.",
+        "Sentence three is also short.",
+    ]
+
+
+def test_chunk_text_recursive_overlap_carries_trailing_sentence_into_next_chunk():
+    text = "Sentence one is short. Sentence two is short too. Sentence three is also short."
+    chunks = chunk_text_recursive(text, chunk_size=60, overlap=30)
+    assert chunks == [
+        "Sentence one is short. Sentence two is short too.",
+        "Sentence two is short too. Sentence three is also short.",
+    ]
+
+
+def test_chunk_text_recursive_treats_blank_line_as_a_unit_boundary():
+    # Neither paragraph has sentence-ending punctuation, so without paragraph
+    # splitting this would be one giant unrecoverable unit requiring a
+    # character-level fallback. Paragraph-first splitting keeps them as two
+    # clean units that pack without any mid-word cut.
+    text = "Alpha bravo charlie delta\n\nEcho foxtrot golf hotel"
+    chunks = chunk_text_recursive(text, chunk_size=30, overlap=0)
+    assert chunks == ["Alpha bravo charlie delta", "Echo foxtrot golf hotel"]
+
+
+def test_chunk_text_recursive_falls_back_to_character_split_for_oversized_unit():
+    # A single "sentence" with no punctuation or whitespace at all -- no
+    # semantic boundary smaller than chunk_size exists, so it must fall back
+    # to chunk_text()'s character windows.
+    text = "supercalifragilisticexpialidocious"
+    chunks = chunk_text_recursive(text, chunk_size=10, overlap=0)
+    assert len(chunks) > 1
+    assert all(len(c) <= 10 for c in chunks)
 
 
 # -----------------------------
@@ -493,6 +553,24 @@ def test_chunk_document_uses_filename_not_full_path(tmp_path):
     chunks = chunk_document(doc, chunk_size=100, overlap=0)
 
     assert chunks[0].source == "report.txt"
+
+
+def test_chunk_document_recursive_strategy_uses_sentence_boundaries(tmp_path):
+    doc = tmp_path / "notes.txt"
+    doc.write_text("Sentence one is short. Sentence two is short too.", encoding="utf-8")
+
+    chunks = chunk_document(doc, chunk_size=30, overlap=0, chunk_strategy="recursive")
+
+    assert [c.text for c in chunks] == ["Sentence one is short.", "Sentence two is short too."]
+    assert all(c.source == "notes.txt" for c in chunks)
+    assert [c.index for c in chunks] == [0, 1]
+
+
+def test_chunk_document_unknown_strategy_raises(tmp_path):
+    doc = tmp_path / "notes.txt"
+    doc.write_text("hello", encoding="utf-8")
+    with pytest.raises(ValueError):
+        chunk_document(doc, chunk_strategy="not-a-real-strategy")
 
 
 # -----------------------------

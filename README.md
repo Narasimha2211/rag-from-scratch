@@ -23,7 +23,10 @@ This helped me understand how RAG reduces hallucinations by grounding the answer
 ### 1) CLI pipeline
 File: [rag_from_scratch.py](rag_from_scratch.py)
 
-- Chunking with overlap (optionally word-boundary aware)
+- Chunking with overlap (`--chunk-strategy`):
+  - `fixed` (default) — character windows, optionally word-boundary aware
+  - `recursive` — packs whole paragraphs/sentences up to `--chunk-size` instead of
+    cutting at an arbitrary character offset
 - Embedders:
   - `hashing` (offline fallback)
   - `sentence-transformers` (local model)
@@ -153,6 +156,32 @@ redundancy entirely (same order as without `--mmr`); lower values favor
 diversity more strongly. It composes with `--retrieval hybrid` and
 `--rerank`, since `mmr_select` diversifies whatever candidate order they
 produce using the underlying chunk embeddings.
+
+---
+
+## Chunking strategies
+
+`--chunk-strategy fixed` (the default) is easy to reason about but cuts at
+an arbitrary character offset — even with `--respect-word-boundaries`, a
+window can still land in the middle of a sentence, splitting a fact across
+two chunks in a way overlap only partially compensates for.
+
+`--chunk-strategy recursive` splits along a hierarchy of natural
+boundaries instead — paragraphs first, then sentences — and greedily packs
+the resulting units up to `--chunk-size`, carrying trailing sentences into
+the next chunk for `--overlap` the same way the fixed strategy does for
+characters. A sentence longer than `--chunk-size` (no smaller boundary left
+to respect) falls back to a character-level split. The trade-off is chunk
+sizes that vary more, since packing stops at a sentence boundary rather
+than exactly at `--chunk-size`:
+
+```bash
+python rag_from_scratch.py --doc data --chunk-strategy recursive --chunk-size 300
+```
+
+`chunk_text_recursive()` (the standalone splitter) and the paragraph/sentence
+unit-packing it's built on are implemented from scratch in
+[rag_from_scratch.py](rag_from_scratch.py), same as the rest of this project.
 
 ---
 
