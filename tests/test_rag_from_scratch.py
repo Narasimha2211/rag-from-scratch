@@ -1,3 +1,4 @@
+import json
 import os
 import subprocess
 import sys
@@ -820,3 +821,52 @@ def test_mmr_select_respects_top_k():
     vectors = np.eye(5, dtype=np.float32)[:, :2]
     results = mmr_select(candidates, vectors, top_k=2, lambda_mult=0.5)
     assert len(results) == 2
+
+
+# -----------------------------
+# CLI --output json
+# -----------------------------
+
+def _run_cli(*extra_args: str) -> str:
+    repo_root = str(Path(__file__).resolve().parent.parent)
+    proc = subprocess.run(
+        [sys.executable, "rag_from_scratch.py", "--output", "json", *extra_args],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return proc.stdout
+
+
+def test_cli_output_json_is_valid_json_with_expected_shape():
+    stdout = _run_cli("--query", "Why do we use overlap in chunking?", "--top-k", "2")
+    payload = json.loads(stdout)
+
+    assert payload["chunk_strategy"] == "fixed"
+    assert payload["deduped"] is None
+    assert payload["mmr"] is None
+    assert len(payload["retrieved"]) == 2
+    assert set(payload["retrieved"][0]) == {"chunk_id", "score", "text", "source"}
+    assert "Why do we use overlap in chunking?" in payload["prompt"]
+    assert payload["answer"]
+
+
+def test_cli_output_json_reports_mmr_and_dedupe_settings():
+    stdout = _run_cli(
+        "--doc",
+        "data",
+        "--query",
+        "Why do we use overlap in chunking?",
+        "--top-k",
+        "2",
+        "--mmr",
+        "--mmr-lambda",
+        "0.3",
+        "--dedupe",
+    )
+    payload = json.loads(stdout)
+
+    assert payload["mmr"] == {"lambda": 0.3}
+    assert payload["deduped"]["threshold"] == 0.9
+    assert payload["deduped"]["after"] <= payload["deduped"]["before"]

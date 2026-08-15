@@ -51,6 +51,9 @@ File: [rag_from_scratch.py](rag_from_scratch.py)
   directory of them (all ingested together, e.g. `--doc data`)
 - Source citations — every retrieved chunk is tagged with where it came from
   (`file.txt#3`), shown in the CLI output and grounded prompt
+- Output format (`--output {text,json}`): `text` (default) prints the full step-by-step
+  pipeline trace; `json` prints one JSON object (retrieved chunks, prompt, answer, and
+  the run's config) for scripting/automation
 - Prompt building that enforces:
   - “use only provided context”
   - abstain when evidence is missing
@@ -206,6 +209,23 @@ python rag_from_scratch.py --doc data --chunk-size 200 --overlap 190 --dedupe --
 two chunks count as duplicates; `1.0` only drops exact token-set matches,
 lower values drop more aggressively. `deduplicate_chunks()` reuses BM25's
 `_tokenize`, implemented from scratch, same as the rest of this project.
+
+---
+
+## Scripting with `--output json`
+
+The default `text` output is a step-by-step trace meant for reading in a
+terminal; `--output json` prints a single JSON object instead, for piping
+into `jq`, feeding another program, or asserting against in a test:
+
+```bash
+python rag_from_scratch.py --query "Why do we use overlap in chunking?" --output json | jq '.answer'
+```
+
+The object includes the run's config (`chunk_strategy`, `deduped`,
+`embedder`, `vector_store`, `retrieval`, `rerank`, `mmr`) alongside
+`retrieved` (each chunk's `chunk_id`/`score`/`text`/`source`), the full
+`prompt`, and the final `answer`.
 
 ---
 

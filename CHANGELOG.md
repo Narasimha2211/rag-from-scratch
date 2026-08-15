@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Added `--output {text,json}` (default `text`): `json` prints one JSON object (run
+  config, retrieved chunks, prompt, answer) instead of the step-by-step trace, for
+  scripting/automation. Covered by a subprocess-based CLI test, matching the existing
+  pattern used for `HashingEmbedder`'s determinism test.
 - Added chunk deduplication (`--dedupe`, `--dedupe-threshold`, default `0.9`):
   `deduplicate_chunks` drops near-duplicate chunks (by token Jaccard overlap, reusing
   BM25's `_tokenize`) before embedding, keeping the first occurrence. Heavy `--overlap`

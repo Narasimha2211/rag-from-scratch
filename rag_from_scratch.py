@@ -1158,6 +1158,12 @@ def main() -> None:
         default=None,
         help="Load a previously saved NumpyVectorStore instead of re-chunking/re-embedding --doc",
     )
+    parser.add_argument(
+        "--output",
+        choices=["text", "json"],
+        default="text",
+        help="'text' (default) prints the full step-by-step pipeline trace; 'json' prints one JSON object for scripting",
+    )
     args = parser.parse_args()
 
     embedder = choose_embedder(args.embedder)
@@ -1217,6 +1223,36 @@ def main() -> None:
         sources=sources,
     )
     retrieved, prompt, answer = result.retrieved, result.prompt, result.answer
+
+    if args.output == "json":
+        payload = {
+            "source": source_label,
+            "chunks_created": len(chunks),
+            "chunk_strategy": args.chunk_strategy,
+            "deduped": (
+                {"before": chunk_count_before_dedupe, "after": len(chunks), "threshold": args.dedupe_threshold}
+                if chunk_count_before_dedupe is not None and args.dedupe
+                else None
+            ),
+            "embedder": args.embedder,
+            "vector_store": args.vector_store,
+            "retrieval": args.retrieval,
+            "rerank": args.rerank,
+            "mmr": {"lambda": args.mmr_lambda} if args.mmr else None,
+            "retrieved": [
+                {
+                    "chunk_id": item.chunk_id,
+                    "score": item.score,
+                    "text": item.text,
+                    "source": sources.get(item.chunk_id) if sources else None,
+                }
+                for item in retrieved
+            ],
+            "prompt": prompt,
+            "answer": answer,
+        }
+        print(json.dumps(payload, indent=2))
+        return
 
     print("\n=== MY RAG LEARNING PIPELINE ===")
     print(f"Source: {source_label}")
