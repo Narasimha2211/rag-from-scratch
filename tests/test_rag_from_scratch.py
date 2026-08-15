@@ -13,6 +13,7 @@ from rag_from_scratch import (
     LexicalOverlapReranker,
     NumpyVectorStore,
     RetrievedChunk,
+    SourcedChunk,
     build_grounded_prompt,
     build_vector_store,
     choose_reranker,
@@ -20,6 +21,7 @@ from rag_from_scratch import (
     chunk_documents,
     chunk_text,
     chunk_text_recursive,
+    deduplicate_chunks,
     l2_normalize,
     mean_reciprocal_rank,
     mmr_select,
@@ -635,6 +637,50 @@ def test_chunk_documents_tags_each_chunk_with_its_own_source(tmp_path):
     ]
     # index restarts per source document, not a global running counter
     assert [c.index for c in chunks] == [0, 0]
+
+
+# -----------------------------
+# deduplicate_chunks
+# -----------------------------
+
+def _sourced(*texts, source="doc.txt"):
+    return [SourcedChunk(text=t, source=source, index=i) for i, t in enumerate(texts)]
+
+
+def test_deduplicate_chunks_drops_exact_duplicate_keeping_first():
+    chunks = _sourced("the cat sat on the mat", "the cat sat on the mat", "completely different text")
+    deduped = deduplicate_chunks(chunks)
+    assert [c.text for c in deduped] == ["the cat sat on the mat", "completely different text"]
+
+
+def test_deduplicate_chunks_drops_near_duplicate_above_threshold():
+    # Differs by one word/punctuation -- high token overlap, should still be caught.
+    chunks = _sourced("the cat sat on the mat", "the cat sat on the mat!", "completely different text")
+    deduped = deduplicate_chunks(chunks, threshold=0.8)
+    assert [c.text for c in deduped] == ["the cat sat on the mat", "completely different text"]
+
+
+def test_deduplicate_chunks_keeps_dissimilar_chunks_at_high_threshold():
+    chunks = _sourced("the cat sat on the mat", "a completely unrelated sentence about gardening")
+    deduped = deduplicate_chunks(chunks, threshold=0.9)
+    assert len(deduped) == 2
+
+
+def test_deduplicate_chunks_lower_threshold_drops_more_aggressively():
+    # Half the tokens overlap -- not caught at a strict threshold, caught at a lenient one.
+    chunks = _sourced("alpha beta gamma delta", "alpha beta epsilon zeta")
+    assert len(deduplicate_chunks(chunks, threshold=0.9)) == 2
+    assert len(deduplicate_chunks(chunks, threshold=0.3)) == 1
+
+
+def test_deduplicate_chunks_on_empty_list_returns_empty():
+    assert deduplicate_chunks([]) == []
+
+
+@pytest.mark.parametrize("bad_threshold", [0.0, -0.1, 1.1])
+def test_deduplicate_chunks_invalid_threshold_raises(bad_threshold):
+    with pytest.raises(ValueError):
+        deduplicate_chunks(_sourced("some text"), threshold=bad_threshold)
 
 
 # -----------------------------

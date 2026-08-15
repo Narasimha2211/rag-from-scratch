@@ -276,6 +276,51 @@ def chunk_documents(
 
 
 # -----------------------------
+# 1b) CHUNK DEDUPLICATION
+# -----------------------------
+#
+# Overlapping windows (chunk_text's --overlap) or repeated boilerplate
+# across documents (headers, disclaimers, section titles) can produce
+# multiple chunks that are effectively the same text. Left in, they waste
+# embedding calls and index space, and at retrieval time a near-duplicate
+# can crowd another, genuinely different chunk out of a limited top-k.
+
+
+def deduplicate_chunks(chunks: List[SourcedChunk], threshold: float = 0.9) -> List[SourcedChunk]:
+    """
+    Drops near-duplicate chunks, keeping the first occurrence of each.
+
+    Similarity is Jaccard overlap of token sets (reusing BM25's `_tokenize`,
+    so "duplicate" means the same, rather than exact string equality --
+    chunks differing only in whitespace, punctuation, or a couple of words
+    still count. threshold=1.0 only drops exact token-set matches; lower
+    values drop more aggressively. O(n^2) in the number of chunks, which is
+    fine at the corpus sizes this project chunks in memory.
+    """
+    if not 0.0 < threshold <= 1.0:
+        raise ValueError("threshold must be in (0, 1]")
+
+    kept: List[SourcedChunk] = []
+    kept_token_sets: List[set[str]] = []
+
+    for chunk in chunks:
+        tokens = set(_tokenize(chunk.text))
+        is_duplicate = False
+        for kept_tokens in kept_token_sets:
+            union = tokens | kept_tokens
+            if not union:
+                continue  # both sides empty (e.g. punctuation-only chunks) -- nothing to compare
+            if len(tokens & kept_tokens) / len(union) >= threshold:
+                is_duplicate = True
+                break
+        if not is_duplicate:
+            kept.append(chunk)
+            kept_token_sets.append(tokens)
+
+    return kept
+
+
+# -----------------------------
 # 2) EMBEDDING GENERATION
 # -----------------------------
 
@@ -1068,6 +1113,17 @@ def main() -> None:
         help="'fixed' uses character windows; 'recursive' packs whole paragraphs/sentences up to --chunk-size instead",
     )
     parser.add_argument(
+        "--dedupe",
+        action="store_true",
+        help="Drop near-duplicate chunks (by token Jaccard overlap) before embedding",
+    )
+    parser.add_argument(
+        "--dedupe-threshold",
+        type=float,
+        default=0.9,
+        help="Jaccard similarity in (0, 1] above which two chunks count as duplicates (with --dedupe)",
+    )
+    parser.add_argument(
         "--retrieval",
         choices=["dense", "hybrid"],
         default="dense",
@@ -1107,6 +1163,7 @@ def main() -> None:
     embedder = choose_embedder(args.embedder)
     store: FaissVectorStore | NumpyVectorStore
     sources: dict[int, str] | None = None
+    chunk_count_before_dedupe: int | None = None
 
     if args.load_index:
         if args.vector_store == "faiss":
@@ -1128,6 +1185,9 @@ def main() -> None:
             respect_word_boundaries=args.respect_word_boundaries,
             chunk_strategy=args.chunk_strategy,
         )
+        chunk_count_before_dedupe = len(sourced_chunks)
+        if args.dedupe:
+            sourced_chunks = deduplicate_chunks(sourced_chunks, threshold=args.dedupe_threshold)
         chunks = [c.text for c in sourced_chunks]
         sources = {i: f"{c.source}#{c.index}" for i, c in enumerate(sourced_chunks)}
 
@@ -1160,7 +1220,12 @@ def main() -> None:
 
     print("\n=== MY RAG LEARNING PIPELINE ===")
     print(f"Source: {source_label}")
-    print(f"Chunks created: {len(chunks)} (strategy={args.chunk_strategy})")
+    dedupe_note = (
+        f", deduped {chunk_count_before_dedupe} -> {len(chunks)} at threshold={args.dedupe_threshold}"
+        if chunk_count_before_dedupe is not None and args.dedupe
+        else ""
+    )
+    print(f"Chunks created: {len(chunks)} (strategy={args.chunk_strategy}{dedupe_note})")
     print(f"Embedder: {args.embedder}")
     print(f"Vector store: {args.vector_store}")
     print(f"Retrieval: {args.retrieval}")

@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Added chunk deduplication (`--dedupe`, `--dedupe-threshold`, default `0.9`):
+  `deduplicate_chunks` drops near-duplicate chunks (by token Jaccard overlap, reusing
+  BM25's `_tokenize`) before embedding, keeping the first occurrence. Heavy `--overlap`
+  or repeated boilerplate across documents could otherwise waste embedding calls and
+  crowd a genuinely different chunk out of a limited `--top-k`.
 - Added a recursive/paragraph-aware chunking strategy (`--chunk-strategy {fixed,recursive}`,
   default `fixed`): `chunk_text_recursive` splits along a hierarchy of natural boundaries
   (paragraphs, then sentences) instead of a fixed character offset, then greedily packs the

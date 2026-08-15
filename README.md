@@ -44,6 +44,9 @@ File: [rag_from_scratch.py](rag_from_scratch.py)
   - `cross-encoder` — optional, `sentence-transformers` CrossEncoder
 - Diversity (`--mmr`, `--mmr-lambda`): Maximal Marginal Relevance re-selection so the
   final top-k isn't dominated by several near-duplicate chunks
+- Deduplication (`--dedupe`, `--dedupe-threshold`): drops near-duplicate chunks by
+  token Jaccard overlap before embedding, so overlapping windows or repeated
+  boilerplate don't waste embedding calls or crowd out other chunks at retrieval time
 - Multi-document ingestion — `--doc` accepts either a single `.txt` file or a
   directory of them (all ingested together, e.g. `--doc data`)
 - Source citations — every retrieved chunk is tagged with where it came from
@@ -182,6 +185,27 @@ python rag_from_scratch.py --doc data --chunk-strategy recursive --chunk-size 30
 `chunk_text_recursive()` (the standalone splitter) and the paragraph/sentence
 unit-packing it's built on are implemented from scratch in
 [rag_from_scratch.py](rag_from_scratch.py), same as the rest of this project.
+
+---
+
+## Deduplicating chunks
+
+Heavy `--overlap` (or repeated boilerplate across documents -- headers,
+disclaimers, section titles) can produce chunks that are effectively the
+same text. Left in, they waste embedding calls, waste index space, and can
+crowd a genuinely different chunk out of a limited `--top-k` at retrieval
+time. `--dedupe` drops near-duplicate chunks (keeping the first occurrence)
+before embedding, comparing chunks by token Jaccard overlap rather than
+exact string equality:
+
+```bash
+python rag_from_scratch.py --doc data --chunk-size 200 --overlap 190 --dedupe --dedupe-threshold 0.8
+```
+
+`--dedupe-threshold` (default `0.9`) is the Jaccard similarity above which
+two chunks count as duplicates; `1.0` only drops exact token-set matches,
+lower values drop more aggressively. `deduplicate_chunks()` reuses BM25's
+`_tokenize`, implemented from scratch, same as the rest of this project.
 
 ---
 
