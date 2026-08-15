@@ -21,6 +21,7 @@ from rag_from_scratch import (
     chunk_text,
     l2_normalize,
     mean_reciprocal_rank,
+    mmr_select,
     recall_at_k,
     reciprocal_rank_fusion,
     resolve_doc_paths,
@@ -450,6 +451,24 @@ def test_retrieve_and_answer_threads_sources_into_prompt():
     assert "source=doc.txt#0" in result.prompt
 
 
+def test_retrieve_and_answer_applies_mmr():
+    # Chunk 1 is a near-duplicate of chunk 0; with a diverse corpus otherwise
+    # dominated by near-duplicates, --mmr should still return top_k results
+    # without erroring when composed with the shared pipeline helper.
+    chunks = [
+        "the secret keyword is glorbnax",
+        "the secret keyword is definitely glorbnax",
+        "completely unrelated text about gardening",
+    ]
+    embedder, store = _build_store(chunks)
+
+    result = retrieve_and_answer(
+        "glorbnax", embedder, store, chunks, top_k=2, retrieval="dense", mmr=True, mmr_lambda=0.3
+    )
+
+    assert len(result.retrieved) == 2
+
+
 # -----------------------------
 # chunk_document (source citations)
 # -----------------------------
@@ -595,3 +614,85 @@ def test_mean_reciprocal_rank_mismatched_lengths_raises():
 def test_mean_reciprocal_rank_empty_rankings_raises():
     with pytest.raises(ValueError):
         mean_reciprocal_rank([], [])
+
+
+# -----------------------------
+# NumpyVectorStore.get_vectors
+# -----------------------------
+
+def test_numpy_vector_store_get_vectors_returns_normalized_rows():
+    store = NumpyVectorStore()
+    vectors = np.array([[3.0, 4.0], [1.0, 0.0]], dtype=np.float32)
+    store.add(vectors, ["chunk-a", "chunk-b"])
+
+    fetched = store.get_vectors([1, 0])
+    np.testing.assert_allclose(fetched[0], [1.0, 0.0], rtol=1e-6)
+    np.testing.assert_allclose(fetched[1], [0.6, 0.8], rtol=1e-6)  # L2-normalized (3,4)
+
+
+def test_numpy_vector_store_get_vectors_on_empty_store_raises():
+    with pytest.raises(ValueError):
+        NumpyVectorStore().get_vectors([0])
+
+
+# -----------------------------
+# mmr_select
+# -----------------------------
+
+def test_mmr_select_on_empty_candidates_returns_empty():
+    assert mmr_select([], np.zeros((0, 2), dtype=np.float32), top_k=3) == []
+
+
+def test_mmr_select_mismatched_vector_rows_raises():
+    candidates = [RetrievedChunk(chunk_id=0, score=1.0, text="a")]
+    with pytest.raises(ValueError):
+        mmr_select(candidates, np.zeros((2, 2), dtype=np.float32), top_k=1)
+
+
+@pytest.mark.parametrize("bad_lambda", [-0.1, 1.1])
+def test_mmr_select_invalid_lambda_raises(bad_lambda):
+    candidates = [RetrievedChunk(chunk_id=0, score=1.0, text="a")]
+    vectors = np.array([[1.0, 0.0]], dtype=np.float32)
+    with pytest.raises(ValueError):
+        mmr_select(candidates, vectors, top_k=1, lambda_mult=bad_lambda)
+
+
+def test_mmr_select_with_lambda_one_keeps_original_relevance_order():
+    # lambda=1.0 ignores redundancy entirely, so MMR should just reproduce the
+    # incoming rank order regardless of how similar the candidates' vectors are.
+    candidates = [
+        RetrievedChunk(chunk_id=0, score=0.9, text="a"),
+        RetrievedChunk(chunk_id=1, score=0.8, text="b"),
+        RetrievedChunk(chunk_id=2, score=0.7, text="c"),
+    ]
+    vectors = np.array([[1.0, 0.0], [1.0, 0.0], [1.0, 0.0]], dtype=np.float32)  # identical
+    results = mmr_select(candidates, vectors, top_k=3, lambda_mult=1.0)
+    assert [r.chunk_id for r in results] == [0, 1, 2]
+
+
+def test_mmr_select_diversifies_away_from_near_duplicates():
+    # Chunk 1 is a near-duplicate of chunk 0 (top-ranked); chunk 2 is
+    # unrelated but ranked last. A low lambda should prefer covering new
+    # ground over piling on redundant top-ranked evidence.
+    candidates = [
+        RetrievedChunk(chunk_id=0, score=0.95, text="a"),
+        RetrievedChunk(chunk_id=1, score=0.94, text="a-near-dup"),
+        RetrievedChunk(chunk_id=2, score=0.50, text="c"),
+    ]
+    vectors = np.array(
+        [
+            [1.0, 0.0],
+            [0.99, 0.01],
+            [0.0, 1.0],
+        ],
+        dtype=np.float32,
+    )
+    results = mmr_select(candidates, vectors, top_k=2, lambda_mult=0.2)
+    assert [r.chunk_id for r in results] == [0, 2]
+
+
+def test_mmr_select_respects_top_k():
+    candidates = [RetrievedChunk(chunk_id=i, score=1.0, text=str(i)) for i in range(5)]
+    vectors = np.eye(5, dtype=np.float32)[:, :2]
+    results = mmr_select(candidates, vectors, top_k=2, lambda_mult=0.5)
+    assert len(results) == 2

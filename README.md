@@ -39,6 +39,8 @@ File: [rag_from_scratch.py](rag_from_scratch.py)
   - `none` (default)
   - `lexical` — dependency-free, rescoring the shortlist with BM25
   - `cross-encoder` — optional, `sentence-transformers` CrossEncoder
+- Diversity (`--mmr`, `--mmr-lambda`): Maximal Marginal Relevance re-selection so the
+  final top-k isn't dominated by several near-duplicate chunks
 - Multi-document ingestion — `--doc` accepts either a single `.txt` file or a
   directory of them (all ingested together, e.g. `--doc data`)
 - Source citations — every retrieved chunk is tagged with where it came from
@@ -131,6 +133,26 @@ against two short documents, not a rigorous benchmark — treat the numbers as
 a sanity check that the pipeline's own retrieval choices behave the way the
 research they're based on predicts, not as a substitute for evaluating on
 your own documents and queries.
+
+---
+
+## Diversity with MMR
+
+Optimizing purely for relevance can waste a limited top-k on several
+near-duplicate chunks that all happen to score well, instead of covering the
+query from multiple angles. [Maximal Marginal Relevance](https://www.cs.cmu.edu/~jgc/publication/The_Use_of_MMR_Diversity_Based_LTMIR_1998.pdf)
+(Carbonell & Goldstein, 1998) greedily re-selects the final top-k, trading
+relevance off against similarity to chunks already picked:
+
+```bash
+python rag_from_scratch.py --query "Why do we use overlap in chunking?" --mmr --mmr-lambda 0.3
+```
+
+`--mmr-lambda` (default `0.5`) controls the trade-off: `1.0` ignores
+redundancy entirely (same order as without `--mmr`); lower values favor
+diversity more strongly. It composes with `--retrieval hybrid` and
+`--rerank`, since `mmr_select` diversifies whatever candidate order they
+produce using the underlying chunk embeddings.
 
 ---
 

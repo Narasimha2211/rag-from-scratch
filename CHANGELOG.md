@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Added Maximal Marginal Relevance (`--mmr`, `--mmr-lambda`): `mmr_select` greedily
+  re-selects the final top-k trading relevance off against redundancy (Carbonell &
+  Goldstein, 1998), so results aren't dominated by several near-duplicate chunks.
+  Relevance is derived from each candidate's incoming rank (like `reciprocal_rank_fusion`,
+  to stay agnostic to dense/BM25/cross-encoder score scales); redundancy always uses
+  cosine similarity in embedding space via new `NumpyVectorStore.get_vectors` /
+  `FaissVectorStore.get_vectors` methods. Wired into `retrieve_and_answer()`, so it composes
+  with `--retrieval hybrid` and `--rerank` for both the CLI and (once exposed there) Streamlit.
 - Added `eval_retrieval.py`, a runnable evaluation harness measuring `recall_at_k` and
   `mean_reciprocal_rank` (both new, with tests) over 10 hand-labeled queries in
   `data/eval_queries.json`, comparing dense / hybrid / hybrid+lexical-rerank side by side

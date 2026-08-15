@@ -332,6 +332,12 @@ class NumpyVectorStore:
         store.chunks = json.loads(chunks_path.read_text(encoding="utf-8"))
         return store
 
+    def get_vectors(self, chunk_ids: List[int]) -> np.ndarray:
+        """Fetch the (already L2-normalized) embeddings for a set of chunk_ids, e.g. for MMR."""
+        if self.matrix is None:
+            raise ValueError("Store is empty -- call add() first")
+        return self.matrix[chunk_ids]
+
 
 # Optional FAISS variant for scale/performance
 class FaissVectorStore:
@@ -369,6 +375,12 @@ class FaissVectorStore:
                 continue
             results.append(RetrievedChunk(chunk_id=int(idx), score=float(score), text=self.chunks[int(idx)]))
         return results
+
+    def get_vectors(self, chunk_ids: List[int]) -> np.ndarray:
+        """Fetch the (already L2-normalized) embeddings for a set of chunk_ids, e.g. for MMR."""
+        if self.index is None:
+            raise ValueError("Store is empty -- call add() first")
+        return np.array([self.index.reconstruct(i) for i in chunk_ids], dtype=np.float32)
 
 
 # -----------------------------
@@ -653,6 +665,75 @@ def mean_reciprocal_rank(
 
 
 # -----------------------------
+# 3e) MAXIMAL MARGINAL RELEVANCE (DIVERSITY)
+# -----------------------------
+#
+# A retriever (or reranker) optimizes purely for relevance, which can surface
+# several near-duplicate chunks that all happen to score well -- wasting a
+# limited top-k on redundant evidence instead of covering the query from
+# multiple angles. MMR (Carbonell & Goldstein, 1998, "The Use of MMR,
+# Diversity-Based Reranking for Reordering Documents and Producing Summaries")
+# greedily builds the final top-k by trading relevance off against similarity
+# to chunks already selected.
+
+
+def mmr_select(
+    candidates: List[RetrievedChunk],
+    candidate_vectors: np.ndarray,
+    top_k: int = 3,
+    lambda_mult: float = 0.5,
+) -> List[RetrievedChunk]:
+    """
+    Greedily select `top_k` candidates balancing relevance against redundancy:
+
+        mmr(d) = lambda * relevance(d) - (1 - lambda) * max_{s in selected} sim(d, s)
+
+    `relevance(d)` is derived from d's rank in `candidates` (`1 / (1 + rank)`)
+    rather than its raw `.score` -- the same reasoning as `reciprocal_rank_fusion`:
+    candidates may come from dense search, BM25, RRF fusion, or a cross-encoder
+    reranker, and those scores live on incomparable scales. Redundancy is
+    always measured in embedding space via cosine similarity, independent of
+    how `candidates` was ranked.
+
+    `candidate_vectors` must be row-aligned with `candidates`, i.e.
+    `candidate_vectors[i]` is the embedding for `candidates[i]` (e.g. from
+    `NumpyVectorStore.get_vectors([c.chunk_id for c in candidates])`).
+
+    lambda_mult=1.0 ignores redundancy entirely (same order as `candidates`,
+    truncated to top_k); lower values favor diversity more strongly.
+    """
+    if not candidates:
+        return []
+    if candidate_vectors.shape[0] != len(candidates):
+        raise ValueError("candidate_vectors must have one row per candidate")
+    if not 0.0 <= lambda_mult <= 1.0:
+        raise ValueError("lambda_mult must be between 0 and 1")
+
+    vectors = l2_normalize(candidate_vectors)
+    relevance = np.array([1.0 / (1 + rank) for rank in range(len(candidates))], dtype=np.float32)
+
+    top_k = min(top_k, len(candidates))
+    selected: List[int] = []
+    remaining = set(range(len(candidates)))
+
+    while remaining and len(selected) < top_k:
+        if not selected:
+            best = max(remaining, key=lambda i: relevance[i])
+        else:
+            selected_vectors = vectors[selected]
+
+            def mmr_score(i: int) -> float:
+                redundancy = float(np.max(vectors[i] @ selected_vectors.T))
+                return lambda_mult * relevance[i] - (1 - lambda_mult) * redundancy
+
+            best = max(remaining, key=mmr_score)
+        selected.append(best)
+        remaining.discard(best)
+
+    return [candidates[i] for i in selected]
+
+
+# -----------------------------
 # 4) RETRIEVAL + 5) AUGMENTATION
 # -----------------------------
 
@@ -802,6 +883,8 @@ def retrieve_and_answer(
     top_k: int = 3,
     retrieval: str = "dense",
     rerank: str | None = "none",
+    mmr: bool = False,
+    mmr_lambda: float = 0.5,
     generate_with_llm: bool = False,
     sources: dict[int, str] | None = None,
 ) -> PipelineResult:
@@ -814,12 +897,18 @@ def retrieve_and_answer(
     `sources`, if given, maps chunk_id -> citation label and is threaded
     through to build_grounded_prompt() (see there for why it's a dict
     keyed by chunk_id rather than a positional list).
+
+    `mmr`, if True, diversifies the final top-k with mmr_select() after
+    retrieval/reranking, trading relevance off against redundancy in
+    embedding space -- see mmr_select() for why it composes safely with
+    any of the retrieval/rerank options above.
     """
     query_vector = embedder.encode([query])[0]
     reranker = choose_reranker(rerank)
-    # When reranking, fetch a broader shortlist first so the reranker has
-    # something worth rescoring instead of just re-sorting the final top-k.
-    retrieval_k = max(10, top_k * 3) if reranker else top_k
+    # When reranking or diversifying, fetch a broader shortlist first so
+    # there's something worth rescoring/reselecting instead of just
+    # re-sorting the final top-k.
+    retrieval_k = max(10, top_k * 3) if (reranker or mmr) else top_k
 
     if retrieval == "hybrid":
         retriever = HybridRetriever(store, BM25(chunks))
@@ -828,7 +917,11 @@ def retrieve_and_answer(
         retrieved = store.search(query_vector, top_k=retrieval_k)
 
     if reranker:
-        retrieved = reranker.rerank(query, retrieved, top_k=top_k)
+        retrieved = reranker.rerank(query, retrieved, top_k=retrieval_k if mmr else top_k)
+
+    if mmr:
+        candidate_vectors = store.get_vectors([c.chunk_id for c in retrieved])
+        retrieved = mmr_select(retrieved, candidate_vectors, top_k=top_k, lambda_mult=mmr_lambda)
 
     prompt = build_grounded_prompt(query, retrieved, sources=sources)
     answer = generate_with_openai(prompt) if generate_with_llm else simple_grounded_answer(query, retrieved)
@@ -872,6 +965,17 @@ def main() -> None:
         choices=["none", "lexical", "cross-encoder"],
         default="none",
         help="Rescore a broader candidate shortlist before taking the final top-k",
+    )
+    parser.add_argument(
+        "--mmr",
+        action="store_true",
+        help="Diversify the final top-k with Maximal Marginal Relevance instead of pure relevance ranking",
+    )
+    parser.add_argument(
+        "--mmr-lambda",
+        type=float,
+        default=0.5,
+        help="MMR relevance/diversity trade-off in [0, 1]; 1.0 = pure relevance, lower favors diversity",
     )
     parser.add_argument(
         "--save-index",
@@ -933,6 +1037,8 @@ def main() -> None:
         top_k=args.top_k,
         retrieval=args.retrieval,
         rerank=args.rerank,
+        mmr=args.mmr,
+        mmr_lambda=args.mmr_lambda,
         generate_with_llm=args.generate_with_llm,
         sources=sources,
     )
@@ -945,6 +1051,7 @@ def main() -> None:
     print(f"Vector store: {args.vector_store}")
     print(f"Retrieval: {args.retrieval}")
     print(f"Reranker: {args.rerank}")
+    print(f"MMR: {'on (lambda=' + str(args.mmr_lambda) + ')' if args.mmr else 'off'}")
 
     print("\n--- Top Retrieved Chunks ---")
     for item in retrieved:
