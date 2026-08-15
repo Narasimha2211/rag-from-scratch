@@ -62,13 +62,14 @@ File: [rag_from_scratch.py](rag_from_scratch.py)
 File: [streamlit_app.py](streamlit_app.py)
 
 Interactive UI to experiment with:
-- chunk size
-- overlap
+- chunk strategy (fixed vs. recursive), chunk size, overlap
+- chunk deduplication (on/off, threshold)
 - top-k retrieval
 - embedder choice
 - vector store choice
 - retrieval mode (dense vs. hybrid)
 - reranker (none / lexical / cross-encoder)
+- MMR diversity (on/off, lambda)
 - optional LLM generation
 - multiple uploaded `.txt` documents at once, each cited by name
 
@@ -161,7 +162,8 @@ python rag_from_scratch.py --query "Why do we use overlap in chunking?" --mmr --
 redundancy entirely (same order as without `--mmr`); lower values favor
 diversity more strongly. It composes with `--retrieval hybrid` and
 `--rerank`, since `mmr_select` diversifies whatever candidate order they
-produce using the underlying chunk embeddings.
+produce using the underlying chunk embeddings. Also available in the
+Streamlit app as a "Diversify with MMR" checkbox + lambda slider.
 
 ---
 
@@ -188,6 +190,7 @@ python rag_from_scratch.py --doc data --chunk-strategy recursive --chunk-size 30
 `chunk_text_recursive()` (the standalone splitter) and the paragraph/sentence
 unit-packing it's built on are implemented from scratch in
 [rag_from_scratch.py](rag_from_scratch.py), same as the rest of this project.
+Also available in the Streamlit app as a "Chunk Strategy" selector.
 
 ---
 
@@ -209,6 +212,8 @@ python rag_from_scratch.py --doc data --chunk-size 200 --overlap 190 --dedupe --
 two chunks count as duplicates; `1.0` only drops exact token-set matches,
 lower values drop more aggressively. `deduplicate_chunks()` reuses BM25's
 `_tokenize`, implemented from scratch, same as the rest of this project.
+Also available in the Streamlit app as a "Deduplicate near-identical chunks"
+checkbox + threshold slider.
 
 ---
 

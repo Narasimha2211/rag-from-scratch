@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Wired chunk strategy, deduplication, and MMR into the Streamlit app: sidebar controls
+  for `chunk_strategy`, `dedupe`/`dedupe_threshold`, and `mmr`/`mmr_lambda` mirroring the
+  CLI's equivalent flags. The upload handler now builds `SourcedChunk`s directly and calls
+  `chunk_text_recursive`/`deduplicate_chunks` (previously CLI-only), so the two entry
+  points no longer diverge on which chunking/dedup features are available.
 - Added `--output {text,json}` (default `text`): `json` prints one JSON object (run
   config, retrieved chunks, prompt, answer) instead of the step-by-step trace, for
   scripting/automation. Covered by a subprocess-based CLI test, matching the existing
@@ -24,7 +29,7 @@
   to stay agnostic to dense/BM25/cross-encoder score scales); redundancy always uses
   cosine similarity in embedding space via new `NumpyVectorStore.get_vectors` /
   `FaissVectorStore.get_vectors` methods. Wired into `retrieve_and_answer()`, so it composes
-  with `--retrieval hybrid` and `--rerank` for both the CLI and (once exposed there) Streamlit.
+  with `--retrieval hybrid` and `--rerank` for both the CLI and Streamlit.
 - Added `eval_retrieval.py`, a runnable evaluation harness measuring `recall_at_k` and
   `mean_reciprocal_rank` (both new, with tests) over 10 hand-labeled queries in
   `data/eval_queries.json`, comparing dense / hybrid / hybrid+lexical-rerank side by side
